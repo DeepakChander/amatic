@@ -17,7 +17,7 @@ Nothing here is a feature. All of it is a prerequisite.
 |---|---|---|
 | 0.1 | Pagefile → D:, Disk Cleanup, Downloads → D: | ≥25 GB free on C:; servers survive 1 h |
 | 0.2 | Move the project to `D:\amatic-main`, fresh `yarn install` | Runs from D:; `node_modules` out of OneDrive |
-| 0.3 | `git init`, `.gitignore`, baseline commit | `git status` clean; `git log` has one commit |
+| 0.3 | ~~`git init`~~ **done** — private remote https://github.com/DeepakChander/amatic | ✅ complete |
 | 0.4 | Create `.env.local` with all three keys | `/health` reports three `true` |
 | 0.5 | **Run one real teaching session and record what happens** | A written note: did recognition identify the drawing? was the narration good? what did it cost? |
 | 0.6 | `nodemon` for the backend | Editing `api/**` restarts automatically |

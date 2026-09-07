@@ -130,8 +130,8 @@ Worth knowing before you file a bug:
   Compare against that baseline rather than expecting green. `tsc --noEmit` is clean.
 - **`yarn test:code` (eslint) already fails** on unused imports in `App.tsx` and
   `AppMainMenu.tsx`.
-- **This working copy is not a git repository** — there is no version control to fall
-  back on. Back files up before large edits.
+- **No CI yet.** Nothing runs on push. Version control exists (`main` tracking
+  `origin` at https://github.com/DeepakChander/amatic), but there are no automated checks.
 - **There is no text-chat UI.** The canvas teaching loop is the only live AI path;
   `/api/ai/chat` exists but nothing calls it.
 - **`api/voice/speech-to-text.js` is a stub** that returns an empty transcript. Speech

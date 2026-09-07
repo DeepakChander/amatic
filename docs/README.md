@@ -50,6 +50,8 @@ with an AI layer on top.
 | [16-decisions.md](16-decisions.md) | Why things are the way they are (ADRs) |
 | [17-roadmap.md](17-roadmap.md) | Completion assessment, demo readiness, priorities |
 | [18-implementation-plan.md](18-implementation-plan.md) | The production build-out plan, phased |
+| [19-target-architecture.md](19-target-architecture.md) | What this becomes in production, and why each choice |
+| [20-storage-and-capacity.md](20-storage-and-capacity.md) | Storage sizing, retention, and whether you need to buy any |
 
 ---
 
@@ -59,8 +61,8 @@ Every one of these is documented in detail elsewhere, but you should know them n
 
 1. **`.env.local` must exist at the repo root.** Without it every AI call fails at the key
    check. See [01](01-getting-started.md).
-2. **This working copy is not a git repository.** No undo. Back up before editing.
-   See [13](13-troubleshooting.md).
+2. **No CI.** Git exists (`origin` → https://github.com/DeepakChander/amatic), but nothing runs on
+   push — run the checks yourself. See [11](11-development-workflow.md).
 3. **The test suite has ~138 pre-existing failures.** A red suite is the normal state.
    See [12](12-testing.md).
 4. **~7,100 lines under `amatic-app/lib/` are dead code** describing an architecture that

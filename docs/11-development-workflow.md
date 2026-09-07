@@ -67,10 +67,14 @@ node --check amatic-app/api/ai/master.js
 `npm install` creates a `package-lock.json` beside `yarn.lock` and breaks workspace
 resolution. The pin is `yarn@1.22.22`.
 
-### 4. There is no git in this working copy
+### 4. Version control exists — use it
 
-No `git checkout`, no stash, no diff against HEAD. **Copy a file before editing it.**
-Fixing this is the highest-value 5 minutes available — see [13](13-troubleshooting.md).
+This is a git repository on `main`, tracking `origin` at https://github.com/DeepakChander/amatic
+(private). Branch and commit normally; the scratch-directory backup habit from before the
+repo existed is no longer needed.
+
+There is **no CI**, so nothing validates a push. Run `test:typecheck` and the suite
+yourself, and compare failures against the baseline in [12](12-testing.md).
 
 ### 5. Verify what goes on the wire, not just that it compiles
 
@@ -86,7 +90,7 @@ making mechanical edits across them:
 
 - Prefer **literal string replacement with an occurrence assertion** over regex. A script
   that checks `split(needle).length - 1 === 1` and aborts otherwise leaves the file
-  untouched on a mismatch — which is what you want with no git.
+  untouched on a mismatch — still the safer pattern for bulk edits, even with git.
 - Line-number edits should assert the content of boundary lines first. During this
   project's history an off-by-two in a line range was caught only because the script
   asserted the closing line's text.

@@ -80,7 +80,7 @@ would remove the class of bug.
 ### Moderate
 
 **11.** 138 untriaged test failures · **12.** Chrome/Edge-only voice input ·
-**13.** No git in the working copy · **14.** Rate limiter broken behind a proxy ·
+**14.** Rate limiter broken behind a proxy ·
 **15.** Privacy posture undecided for a children's product
 
 ---
@@ -123,7 +123,7 @@ quality — it is that the backend is a prototype wearing production clothes.**
 | # | Task | Time | Why |
 |---|---|---|---|
 | 1 | Fix the disk (pagefile → D:) | 30 min | Nothing is testable while processes die |
-| 2 | `git init` + baseline commit | 5 min | Currently no undo exists |
+| 2 | ~~`git init`~~ **done** — `origin` → https://github.com/DeepakChander/amatic | — | ✅ complete |
 | 3 | Add the three keys | 5 min | Unblocks everything |
 | 4 | **Run one real session end to end** | 1 h | The only way to learn if this works |
 | 5 | Surface AI errors in the UI | 2 h | Silence is not an acceptable demo failure |
@@ -154,8 +154,8 @@ It is the more reliable half, it is cheaper, and it is arguably the better produ
 ## 5. Priorities
 
 ### P0 — This week
-1. Fix the disk · 2. `git init` · 3. Add keys · 4. **Run one real session** ·
-5. Log `usage` on every call
+1. Fix the disk · 2. ~~`git init`~~ ✅ done · 3. Add keys ·
+4. **Run one real session** · 5. Log `usage` on every call
 
 ### P1 — Before any demo
 6. Surface `{"type":"error"}` in the UI · 7. Loading state during thinking ·

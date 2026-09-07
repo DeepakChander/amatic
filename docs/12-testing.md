@@ -127,7 +127,8 @@ a UI change will require `test:update`.
 - **No tests for the AI layer at all.** `useCanvasJarvis` (~800 lines), `canvas-monitor`,
   `spatial-memory` and every `api/` endpoint are untested. The most valuable and most
   fragile code has zero coverage.
-- **No CI.** Nothing runs on push — there's no git.
+- **No CI.** Git exists but nothing runs on push. A GitHub Actions workflow gating
+  `test:typecheck` plus a failing-file diff against the baseline is the obvious first step.
 - **No evals.** For an LLM product this is the real gap: there is no way to tell whether a
   prompt change made the teaching better or worse. See [18](18-implementation-plan.md)
   Phase 5.

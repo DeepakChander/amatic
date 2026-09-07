@@ -122,9 +122,9 @@ not exist.
 like intentional, unfinished work rather than superseded work. Keep them if you plan to
 wire them up; delete them if not.
 
-**Do nothing until git exists.** With no version control, deleting 7,000 lines is
-irreversible. `git init` first ([13](13-troubleshooting.md)), commit the baseline, *then*
-delete — at which point it costs nothing to be wrong.
+**Git now exists**, so deletion is cheap to reverse — do it on a branch, and `git revert`
+if the reachability analysis missed an edge. That removes the main argument for deferring
+this.
 
 ## Regenerating the list
 

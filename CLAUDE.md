@@ -14,8 +14,9 @@
 
 ## Critical environment facts
 
-- **This is NOT a git repository.** There is no `git checkout`, stash, or diff against
-  HEAD. Back up any file to a scratch location before editing or deleting it.
+- **Version control:** this is a git repository on `main`, tracking `origin` at
+  https://github.com/DeepakChander/amatic (private). Use normal git workflow — no scratch-directory
+  backups needed. There is no CI, so nothing checks a push.
 - **The AI does not run without `.env.local`** at the repo root (sibling of
   `package.json`), holding `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` and
   `ELEVENLABS_API_KEY`. Check with `GET localhost:3001/health`.
