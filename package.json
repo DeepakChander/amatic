@@ -88,7 +88,8 @@
     "release:latest": "node scripts/release.js --tag=latest",
     "rm:build": "rimraf --glob amatic-app/build amatic-app/dist amatic-app/dev-dist packages/*/dist packages/*/build examples/*/build examples/*/dist",
     "rm:node_modules": "rimraf --glob node_modules amatic-app/node_modules packages/*/node_modules",
-    "clean-install": "yarn rm:node_modules && yarn install"
+    "clean-install": "yarn rm:node_modules && yarn install",
+    "start:server:dev": "yarn --cwd ./amatic-app server:dev"
   },
   "resolutions": {
     "strip-ansi": "6.0.1"
