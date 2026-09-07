@@ -1,0 +1,87 @@
+.excalidraw {
+  .AmaticLogo {
+    --logo-icon--mobile: 1rem;
+    --logo-text--mobile: 0.75rem;
+
+    --logo-icon--xs: 2rem;
+    --logo-text--xs: 1.5rem;
+
+    --logo-icon--small: 2.5rem;
+    --logo-text--small: 1.75rem;
+
+    --logo-icon--normal: 3rem;
+    --logo-text--normal: 2.2rem;
+
+    --logo-icon--large: 90px;
+    --logo-text--large: 65px;
+
+    display: flex;
+    align-items: center;
+
+    svg {
+      flex: 0 0 auto;
+    }
+
+    .AmaticLogo-icon {
+      width: auto;
+      color: var(--color-logo-icon);
+    }
+
+    .AmaticLogo-text {
+      margin-left: 0.75rem;
+      width: auto;
+      color: var(--color-logo-text);
+    }
+
+    &.is-mobile {
+      .AmaticLogo-icon {
+        height: var(--logo-icon--mobile);
+      }
+
+      .AmaticLogo-text {
+        height: var(--logo-text--mobile);
+        margin-left: 0.5rem;
+      }
+    }
+
+    &.is-xs {
+      .AmaticLogo-icon {
+        height: var(--logo-icon--xs);
+      }
+
+      .AmaticLogo-text {
+        height: var(--logo-text--xs);
+      }
+    }
+
+    &.is-small {
+      .AmaticLogo-icon {
+        height: var(--logo-icon--small);
+      }
+
+      .AmaticLogo-text {
+        height: var(--logo-text--small);
+      }
+    }
+
+    &.is-normal {
+      .AmaticLogo-icon {
+        height: var(--logo-icon--normal);
+      }
+
+      .AmaticLogo-text {
+        height: var(--logo-text--normal);
+      }
+    }
+
+    &.is-large {
+      .AmaticLogo-icon {
+        height: var(--logo-icon--large);
+      }
+
+      .AmaticLogo-text {
+        height: var(--logo-text--large);
+      }
+    }
+  }
+}

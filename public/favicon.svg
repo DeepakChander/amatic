@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
+  <!-- White/light background with rounded corners to match the page -->
+  <rect width="1000" height="1000" rx="200" ry="200" fill="#ffffff" />
+  
+  <!-- Amatic diamond logo centered - PURPLE diamonds on white background (matching center logo!) -->
+  <g transform="translate(500, 500)">
+    <!-- Top diamond (semi-transparent purple) -->
+    <path 
+      d="M0 -300 L200 -100 L0 100 L-200 -100 Z" 
+      fill="#6965db" 
+      opacity="0.8"
+    />
+    <!-- Bottom diamond (solid purple) -->
+    <path 
+      d="M0 -100 L200 100 L0 300 L-200 100 Z" 
+      fill="#6965db"
+    />
+    <!-- Center circle (semi-transparent purple) -->
+    <circle cx="0" cy="0" r="75" fill="#6965db" opacity="0.6" />
+  </g>
+</svg>
