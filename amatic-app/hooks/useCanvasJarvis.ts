@@ -25,6 +25,14 @@ import type {
   UserContentBounds,
 } from "@/lib/ai/canvas-monitor";
 import { getSpatialMemory } from "@/lib/ai/spatial-memory";
+import {
+  newCorrelationId,
+  recordMasterError,
+  recordRecognizeFailure,
+  recordWorkerDropped,
+  recordWorkerFailure,
+} from "@/lib/ai/telemetry";
+import { WorkerQueue } from "@/lib/ai/worker-queue";
 import { VoiceMonitor } from "@/lib/voice/voice-monitor";
 import { CaptureUpdateAction } from "@amatic/amatic";
 import type { ExcalidrawImperativeAPI } from "@amatic/amatic/types";
@@ -49,6 +57,11 @@ interface TeachingBrief {
   voiceIntro: string;
   elementId: string;
   timestamp: number;
+  /** Correlation id sent as x-turn-id on the /api/ai/recognize call that
+   *  produced this brief. Forwarded in the master request so, once the
+   *  backend logs by turn id (docs/18 Phase 2.2), recognition and the turn
+   *  that consumed it can be joined. */
+  recognitionId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +152,14 @@ async function exportThumbnail(
  *  for the same drawing (e.g. student draws the same shape twice in one session). */
 const _recognitionHashCache = new Map<string, TeachingBrief>();
 
+/** The recognition request currently in flight, if any. A new stroke
+ *  supersedes it: the older request is aborted so a slow answer about an
+ *  earlier drawing can never overwrite the brief for the current one. */
+let _activeRecognition: AbortController | null = null;
+/** Client-side ceiling on one recognition round-trip. The server gives up at
+ *  20 s; this only guards against a proxy or network that never answers. */
+const RECOGNIZE_CLIENT_TIMEOUT_MS = 25_000;
+
 /** Fast, non-cryptographic hash of the first 120 chars of a base64 string.
  *  Good enough to detect duplicate/similar drawings within a session. */
 function quickImageHash(b64: string): string {
@@ -155,6 +176,15 @@ async function captureAndRecognize(
   api: ExcalidrawImperativeAPI,
   cacheRef: React.MutableRefObject<TeachingBrief | null>,
 ): Promise<void> {
+  const recognitionId = newCorrelationId();
+  // Supersede any recognition still running for an earlier stroke.
+  _activeRecognition?.abort();
+  const controller = new AbortController();
+  _activeRecognition = controller;
+  const timeout = setTimeout(
+    () => controller.abort(),
+    RECOGNIZE_CLIENT_TIMEOUT_MS,
+  );
   try {
     const freedrawEls = api
       .getSceneElements()
@@ -181,12 +211,24 @@ async function captureAndRecognize(
 
     const res = await fetch("/api/ai/recognize", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-turn-id": recognitionId,
+      },
       body: JSON.stringify({ canvasImage: base64 }),
+      signal: controller.signal,
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      recordRecognizeFailure(new Error(`HTTP ${res.status}`), recognitionId);
+      return;
+    }
 
     const brief: Partial<TeachingBrief> = await res.json();
+    // A newer stroke started its own recognition while this one was in
+    // flight; its answer is the one that matches the canvas now.
+    if (_activeRecognition !== controller) {
+      return;
+    }
     if (brief?.topic) {
       const result: TeachingBrief = {
         topic: brief.topic ?? "",
@@ -196,6 +238,7 @@ async function captureAndRecognize(
         voiceIntro: brief.voiceIntro ?? "",
         elementId: target.id,
         timestamp: Date.now(),
+        recognitionId,
       };
       cacheRef.current = result;
       // Store in session cache (limit to 30 entries to avoid unbounded growth)
@@ -205,8 +248,23 @@ async function captureAndRecognize(
       }
       _recognitionHashCache.set(hash, result);
     }
-  } catch {
-    // silent background operation — never propagate
+  } catch (err) {
+    // Superseded by a newer stroke — not a failure.
+    if (
+      (err as Error)?.name === "AbortError" &&
+      _activeRecognition !== controller
+    ) {
+      return;
+    }
+    // Non-fatal for the student — a background failure must never interrupt
+    // drawing — but counted and logged so a systematically failing
+    // recognizer is visible (docs/18 Phase 1.2).
+    recordRecognizeFailure(err, recognitionId);
+  } finally {
+    clearTimeout(timeout);
+    if (_activeRecognition === controller) {
+      _activeRecognition = null;
+    }
   }
 }
 
@@ -228,14 +286,26 @@ const TEXT_ROW_HEIGHT = 50;
 const TEXT_COL_STEP = 220;
 const DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
 const MAX_CONCURRENT_WORKERS = 3;
+/** Briefs waiting behind the running workers. 3 running + 5 queued covers
+ *  the 3–6 visual prompts a turn produces without dropping any. */
+const WORKER_QUEUE_DEPTH = 5;
+/** Consecutive worker failures before the turn stops dispatching images. */
+const WORKER_CIRCUIT_THRESHOLD = 3;
 /** Brief is considered fresh for 30 seconds after recognition */
 const BRIEF_TTL_MS = 30_000;
+/** Shown when the backend reports a failure without a usable message. */
+const GENERIC_TUTOR_ERROR = "The tutor could not respond.";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type JarvisPhase = "idle" | "watching" | "listening" | "teaching";
+export type JarvisPhase =
+  | "idle"
+  | "watching"
+  | "listening"
+  | "teaching"
+  | "error";
 
 export interface TeachingContext {
   intent?: string;
@@ -255,9 +325,12 @@ export function useCanvasJarvis(
 ): {
   jarvisPhase: JarvisPhase;
   currentTranscript: string;
+  /** Student-facing description of the last teaching failure, or null. */
+  jarvisError: string | null;
 } {
   const [jarvisPhase, setJarvisPhase] = useState<JarvisPhase>("idle");
   const [currentTranscript, setCurrentTranscript] = useState("");
+  const [jarvisError, setJarvisError] = useState<string | null>(null);
 
   const monitorRef = useRef<CanvasMonitor | null>(null);
   const voiceMonitorRef = useRef<VoiceMonitor | null>(null);
@@ -267,8 +340,8 @@ export function useCanvasJarvis(
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceQueueRef = useRef<string[]>([]);
   const isPlayingVoiceRef = useRef(false);
-  const activeWorkerCountRef = useRef(0);
-  const workerFailedRef = useRef(false);
+  /** Bounded image-worker queue for the current turn (docs/18 Phase 1.4). */
+  const workerQueueRef = useRef<WorkerQueue | null>(null);
   const transcriptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Cached teaching brief from background recognition */
   const recognitionCacheRef = useRef<TeachingBrief | null>(null);
@@ -291,14 +364,53 @@ export function useCanvasJarvis(
 
       const abort = new AbortController();
       teachingAbortRef.current = abort;
-      activeWorkerCountRef.current = 0;
-      workerFailedRef.current = false;
+      // One id for every request in this turn — recognize is the exception,
+      // it runs before the turn exists and carries its own id in the brief.
+      // The backend reads and echoes this header from Phase 2.2 onward.
+      const turnId = newCorrelationId();
+      const turnHeaders = {
+        "Content-Type": "application/json",
+        "x-turn-id": turnId,
+      };
+      workerQueueRef.current?.close();
+      const workerQueue = new WorkerQueue({
+        concurrency: MAX_CONCURRENT_WORKERS,
+        maxQueued: WORKER_QUEUE_DEPTH,
+        circuitThreshold: WORKER_CIRCUIT_THRESHOLD,
+        onFailure: (err, n) => recordWorkerFailure(err, turnId, n),
+        onDrop: (reason) => recordWorkerDropped(turnId, reason),
+      });
+      workerQueueRef.current = workerQueue;
+      // A failure in this turn flips the status dot red and stays until the
+      // next turn starts, so a student sees "broken", not "listening".
+      let turnFailed = false;
+      const failTurn = (message: string) => {
+        turnFailed = true;
+        recordMasterError(turnId, message);
+        setJarvisError(message);
+        setJarvisPhase("error");
+      };
+      setJarvisError(null);
       setJarvisPhase("teaching");
+
+      // Leave without a turn. Must release the abort ref: while it is set,
+      // the idle trigger and background recognition both treat a turn as
+      // running and proactive teaching never fires again for the session.
+      const bailOut = () => {
+        if (teachingAbortRef.current === abort) {
+          teachingAbortRef.current = null;
+        }
+        if (workerQueueRef.current === workerQueue) {
+          workerQueue.close();
+          workerQueueRef.current = null;
+        }
+        setJarvisPhase("watching");
+      };
 
       const canvasMonitor = monitorRef.current;
       const spatialMemory = getSpatialMemory();
       if (!canvasMonitor) {
-        setJarvisPhase("watching");
+        bailOut();
         return;
       }
 
@@ -311,7 +423,7 @@ export function useCanvasJarvis(
 
       // Skip proactive teaching (no voice) if recognition was low-confidence
       if (briefIsFresh && cached!.confidence === "low" && !context.voice) {
-        setJarvisPhase("watching");
+        bailOut();
         return;
       }
 
@@ -375,7 +487,7 @@ export function useCanvasJarvis(
         try {
           const ttsRes = await fetch("/api/voice/text-to-speech", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: turnHeaders,
             body: JSON.stringify({ text, voiceId: DEFAULT_VOICE_ID, lang: detectedLang }),
             signal: abort.signal,
           });
@@ -402,31 +514,38 @@ export function useCanvasJarvis(
       // ------------------------------------------------------------------
       // Worker dispatch helper (used by both fast path and processLine)
       // ------------------------------------------------------------------
+      // Runs at most MAX_CONCURRENT_WORKERS at once and queues the rest —
+      // briefs 4-5 of a turn used to be silently discarded here. One failure
+      // no longer blocks later images; only WORKER_CIRCUIT_THRESHOLD
+      // consecutive failures stop the turn's dispatch.
       const dispatchWorker = (prompt: string, style: string) => {
-        if (
-          abort.signal.aborted ||
-          workerFailedRef.current ||
-          activeWorkerCountRef.current >= MAX_CONCURRENT_WORKERS
-        )
+        if (abort.signal.aborted) {
           return;
-        activeWorkerCountRef.current++;
-        (async () => {
+        }
+        workerQueue.enqueue(async () => {
+          if (abort.signal.aborted) {
+            return;
+          }
           try {
             const workerRes = await fetch("/api/ai/worker", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: turnHeaders,
               body: JSON.stringify({ prompt, style: style || "schematic", workerId: 1 }),
               signal: abort.signal,
             });
             if (!workerRes.ok) {
-              workerFailedRef.current = true;
-              return;
+              throw new Error(`worker HTTP ${workerRes.status}`);
             }
             const json = await workerRes.json();
             const dataUrl = json.imageUrl;
             const imageBase64 = json.imageData;
             const mimeType = json.imageMimeType || "image/png";
-            if (!imageBase64 || !api) return;
+            if (!imageBase64) {
+              throw new Error("worker returned no image data");
+            }
+            if (abort.signal.aborted) {
+              return;
+            }
 
             const fileId = randomId() as FileId;
             const newFiles: BinaryFileData[] = [
@@ -464,12 +583,14 @@ export function useCanvasJarvis(
               placeY += IMAGE_HEIGHT + PLACEMENT_PAD;
               imagesInRow = 0;
             }
-          } catch {
-            workerFailedRef.current = true;
-          } finally {
-            activeWorkerCountRef.current--;
+          } catch (err) {
+            // An interrupted turn is not a worker failure.
+            if ((err as Error)?.name === "AbortError") {
+              return;
+            }
+            throw err;
           }
-        })();
+        });
       };
 
       // ------------------------------------------------------------------
@@ -485,9 +606,8 @@ export function useCanvasJarvis(
           isPlayingVoiceRef.current = true;
           playNextVoice();
         }
-        // Dispatch all pre-built Gemini prompts directly
-        // Use all pre-built prompts — not capped to MAX_CONCURRENT_WORKERS because
-        // the brief already contains exactly the right number for the topic (3-5).
+        // Dispatch all pre-built Gemini prompts. The queue runs three at a
+        // time and holds the rest, so a 5-brief topic renders all 5.
         for (const vb of cached!.visualBriefs) {
           dispatchWorker(vb.prompt, vb.style);
         }
@@ -514,6 +634,7 @@ export function useCanvasJarvis(
               visualsAlreadyDispatched,
               canvasLabels: cached!.canvasLabels,
               voiceIntro: cached!.voiceIntro,
+              recognitionId: cached!.recognitionId,
             }
           : undefined,
       };
@@ -521,12 +642,16 @@ export function useCanvasJarvis(
       try {
         const res = await fetch("/api/ai/master", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: turnHeaders,
           body: JSON.stringify(body),
           signal: abort.signal,
         });
-        if (!res.ok || !res.body) {
-          setJarvisPhase("watching");
+        if (!res.ok) {
+          failTurn(`The tutor is unavailable (HTTP ${res.status}).`);
+          return;
+        }
+        if (!res.body) {
+          failTurn("The tutor sent an empty response.");
           return;
         }
 
@@ -605,6 +730,15 @@ export function useCanvasJarvis(
                 [],
                 "general",
               );
+            } else if (data.type === "error") {
+              // master.js reports provider/validation failures on the stream
+              // itself. This branch used to be missing, so the dot stayed
+              // green while the turn had already died (docs/18 Phase 1.1).
+              failTurn(
+                typeof data.message === "string" && data.message.trim()
+                  ? data.message
+                  : GENERIC_TUTOR_ERROR,
+              );
             }
           } catch {
             // skip malformed JSON
@@ -624,21 +758,33 @@ export function useCanvasJarvis(
         }
         if (buffer.trim()) processLine(buffer);
       } catch (e) {
-        if ((e as Error).name === "AbortError") {
-          // expected on interrupt
+        if ((e as Error).name !== "AbortError") {
+          // Network failure before or during the stream — the backend is
+          // down or unreachable. Interrupts (AbortError) are expected.
+          failTurn(GENERIC_TUTOR_ERROR);
         }
       } finally {
-        teachingAbortRef.current = null;
         canvasMonitor?.markTeachingComplete();
-        cooldownUntilRef.current = Date.now() + PROACTIVE_COOLDOWN_MS;
         // Persist memory after every teaching session
         spatialMemory.saveToStorage();
-        setJarvisPhase("watching");
-        if (transcriptTimerRef.current) clearTimeout(transcriptTimerRef.current);
-        transcriptTimerRef.current = setTimeout(
-          () => setCurrentTranscript(""),
-          2000,
-        );
+        // Shared state belongs to whichever turn is current. When this turn
+        // was interrupted by a newer one, that turn already owns the abort
+        // ref, the cooldown and the status dot — a stale finally must not
+        // null its controller or paint "watching" over its "teaching"/"error".
+        if (teachingAbortRef.current === abort) {
+          teachingAbortRef.current = null;
+          cooldownUntilRef.current = Date.now() + PROACTIVE_COOLDOWN_MS;
+          if (!turnFailed) {
+            setJarvisPhase("watching");
+          }
+          if (transcriptTimerRef.current) {
+            clearTimeout(transcriptTimerRef.current);
+          }
+          transcriptTimerRef.current = setTimeout(
+            () => setCurrentTranscript(""),
+            2000,
+          );
+        }
       }
     },
     [excalidrawAPI],
@@ -713,6 +859,8 @@ export function useCanvasJarvis(
       voice.stop();
       voiceMonitorRef.current = null;
       monitorRef.current = null;
+      workerQueueRef.current?.close();
+      workerQueueRef.current = null;
       window.removeEventListener("beforeunload", handleUnload);
       if (idleTimerRef.current) {
         clearTimeout(idleTimerRef.current);
@@ -796,5 +944,5 @@ export function useCanvasJarvis(
     };
   }, [excalidrawAPI, startTeaching]);
 
-  return { jarvisPhase, currentTranscript };
+  return { jarvisPhase, currentTranscript, jarvisError };
 }

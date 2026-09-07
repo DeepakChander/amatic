@@ -4,7 +4,7 @@
  * Uses @google/genai (new SDK). Handles all worker IDs dynamically.
  */
 
-const { GoogleGenAI } = require("@google/genai");
+const { geminiFor } = require("../lib/providers");
 
 module.exports = async (req, res) => {
   try {
@@ -37,7 +37,14 @@ module.exports = async (req, res) => {
     }
 
     const startTime = Date.now();
-    const ai = new GoogleGenAI({ apiKey });
+    // 60 s timeout, 2 retries on 429/5xx (Phase 1.3). A client that gives up
+    // (turn interrupted, tab closed) cancels the generation instead of
+    // paying for an image nobody will see.
+    const ai = geminiFor("worker", apiKey);
+    const disconnect = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) disconnect.abort();
+    });
 
     const enhancedPrompt = `Generate a hyper-realistic educational image: ${prompt}.
 Style: ${
@@ -51,7 +58,10 @@ No text overlays or watermarks.`;
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-image",
       contents: enhancedPrompt,
-      config: { responseModalities: ["TEXT", "IMAGE"] },
+      config: {
+        responseModalities: ["TEXT", "IMAGE"],
+        abortSignal: disconnect.signal,
+      },
     });
 
     const generationTime = Date.now() - startTime;
@@ -96,6 +106,7 @@ No text overlays or watermarks.`;
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
+    if (res.writableEnded || res.destroyed) return; // client already gone
     const workerId = req.params?.id
       ? parseInt(req.params.id, 10)
       : req.body?.workerId || 1;

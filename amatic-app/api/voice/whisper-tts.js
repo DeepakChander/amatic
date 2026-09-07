@@ -3,7 +3,7 @@
  * Same ElevenLabs TTS as text-to-speech; accepts { text, voice, speed } for use-realtime-voice.
  */
 
-const ElevenLabs = require("elevenlabs").ElevenLabsClient;
+const { elevenLabsFor, collectAudio } = require("../lib/providers");
 
 const VOICE_MAP = {
   nova: "EXAVITQu4vr4xnSDxMaL",
@@ -35,26 +35,26 @@ module.exports = async (req, res) => {
         .json({ error: "ElevenLabs API key not configured" });
     }
 
-    const client = new ElevenLabs({ apiKey });
+    const { client, requestOptions, timeoutMs } = elevenLabsFor("tts", apiKey);
     const voiceId = VOICE_MAP[voice?.toLowerCase()] || VOICE_MAP.default;
 
-    const audio = await client.generate({
-      voice: voiceId,
-      model_id: "eleven_multilingual_v2",
-      text,
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0.0,
-        use_speaker_boost: true,
+    const audio = await client.generate(
+      {
+        voice: voiceId,
+        model_id: "eleven_multilingual_v2",
+        text,
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0.0,
+          use_speaker_boost: true,
+        },
       },
-    });
+      requestOptions,
+    );
 
-    const chunks = [];
-    for await (const chunk of audio) {
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
+    // Body read bounded separately — the SDK timeout stops at the headers.
+    const buffer = await collectAudio(audio, timeoutMs, "Whisper TTS body");
 
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Length", buffer.length);

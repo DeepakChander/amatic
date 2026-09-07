@@ -3,7 +3,7 @@
  * Uses ElevenLabs for natural voice synthesis
  */
 
-const ElevenLabs = require("elevenlabs").ElevenLabsClient;
+const { elevenLabsFor, collectAudio } = require("../lib/providers");
 
 module.exports = async (req, res) => {
   try {
@@ -31,29 +31,32 @@ module.exports = async (req, res) => {
         .json({ error: "ElevenLabs API key not configured" });
     }
 
-    const client = new ElevenLabs({ apiKey });
+    // 20 s to headers + 20 s for the body, 2 retries on 429/5xx (Phase 1.3).
+    const { client, requestOptions, timeoutMs } = elevenLabsFor("tts", apiKey);
     const selectedVoice = voiceId || "EXAVITQu4vr4xnSDxMaL"; // Bella
 
     console.log(`[TTS] Generating speech for ${text.length} characters (lang: ${lang || "en-US"})...`);
 
-    const streamResponse = await client.textToSpeech.convertAsStream(selectedVoice, {
-      model_id: "eleven_multilingual_v2",
-      text,
-      voice_settings: {
-        stability: 0.45,       // slightly looser = more natural variation
-        similarity_boost: 0.75,
-        style: 0.35,           // raised from 0.0 — adds expression and emotion to narration
-        use_speaker_boost: true,
+    const streamResponse = await client.textToSpeech.convertAsStream(
+      selectedVoice,
+      {
+        model_id: "eleven_multilingual_v2",
+        text,
+        voice_settings: {
+          stability: 0.45,       // slightly looser = more natural variation
+          similarity_boost: 0.75,
+          style: 0.35,           // raised from 0.0 — adds expression and emotion to narration
+          use_speaker_boost: true,
+        },
       },
-    });
+      requestOptions,
+    );
 
-    // Collect audio chunks from the streaming response
-    const chunks = [];
+    // Collect audio chunks. The SDK timeout above stops at the headers, so
+    // a provider that stalls mid-body needs its own deadline or the client's
+    // voice queue hangs on this sentence forever.
     const audioStream = streamResponse.data ?? streamResponse;
-    for await (const chunk of audioStream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const buffer = Buffer.concat(chunks);
+    const buffer = await collectAudio(audioStream, timeoutMs, "TTS body");
 
     console.log(`[TTS] Generated ${buffer.length} bytes of audio`);
 

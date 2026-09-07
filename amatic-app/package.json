@@ -80,9 +80,8 @@
     "serve": "npx http-server build -a localhost -p 5001 -o",
     "build:preview": "yarn build && vite preview --port 5000",
     "server": "node server.js",
-    "dev:full": "concurrently \"yarn start\" \"yarn server\"",
+    "dev:full": "concurrently \"yarn start\" \"yarn server:dev\"",
     "generate:workers": "node scripts/generate-workers.js",
-    "server:dev": "nodemon --watch server.js --watch api --ext js,json server.js",
-    "dev:full:watch": "concurrently \"yarn start\" \"yarn server:dev\""
+    "server:dev": "nodemon --watch server.js --watch api --ext js,json server.js"
   }
 }

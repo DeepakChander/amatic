@@ -8,8 +8,8 @@
  * 3. Handles Interrupts
  */
 
-const Anthropic = require("@anthropic-ai/sdk");
 const { TEACHING_MODEL } = require("./models");
+const { anthropicFor, budgetFor } = require("../lib/providers");
 
 // ---------------------------------------------------------------------------
 // Lightweight content-type classifier (inline, no dependencies)
@@ -83,7 +83,24 @@ module.exports = async (req, res) => {
             return res.end();
         }
 
-        const client = new Anthropic({ apiKey });
+        // 30 s to first byte, 1 retry on the initial request only (Phase 1.3).
+        const client = anthropicFor("master", apiKey);
+
+        // Client disconnect. NOTE: this must be `res`, not `req` — on Node ≥16
+        // the request emits 'close' as soon as its body has been consumed
+        // (body-parser already did that), so a `req.on('close')` registered
+        // here never fires for a real mid-stream disconnect. `res` 'close'
+        // fires when the connection drops before the response ended.
+        // Registered *before* the provider call so a disconnect during the
+        // initial request cancels it too.
+        let aborted = false;
+        const upstream = new AbortController();
+        res.on("close", () => {
+            if (res.writableEnded) return;
+            aborted = true;
+            console.log("[Master] Client disconnected, aborting stream");
+            upstream.abort();
+        });
 
         // 1. Amatic AI system prompt: canvas-first teaching, full spatial + tool awareness
         const systemPrompt = `You are Amatic, the AI tutor inside Amatic — a living educational canvas.
@@ -268,14 +285,24 @@ RULES:
             system: systemPrompt,
             messages: [{ role: "user", content: userContent }],
             stream: true,
-        });
+        }, { signal: upstream.signal });
 
-        // Handle client disconnect to abort stream and stop wasting API credits
-        let aborted = false;
-        req.on('close', () => {
-            aborted = true;
-            console.log('[Master] Client disconnected, aborting stream');
-        });
+        // Mid-stream watchdog: a provider that stops sending deltas must not
+        // hold the turn open forever. Never retried — once bytes are on the
+        // wire the turn is non-idempotent; the student's next draw starts a
+        // fresh one. Thinking deltas count as activity, so a long think does
+        // not trip it.
+        const STREAM_IDLE_MS = budgetFor("master").idleMs;
+        let idleTimer = null;
+        let stalled = false;
+        const armIdleTimer = () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                stalled = true;
+                console.warn(`[Master] no delta for ${STREAM_IDLE_MS} ms, aborting stream`);
+                upstream.abort();
+            }, STREAM_IDLE_MS);
+        };
 
         // 4. Process the Stream: accumulate text, parse complete JSON objects, emit typed SSE events
         let buffer = "";
@@ -362,20 +389,36 @@ RULES:
             buffer = rest;
         };
 
-        for await (const chunk of stream) {
-            if (aborted) break;
-            if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-                buffer += chunk.delta.text || "";
-                tryParseBuffer();
+        armIdleTimer();
+        try {
+            for await (const chunk of stream) {
+                if (aborted) break;
+                armIdleTimer();
+                if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+                    buffer += chunk.delta.text || "";
+                    tryParseBuffer();
+                }
             }
+        } finally {
+            if (idleTimer) clearTimeout(idleTimer);
         }
         tryParseBuffer();
 
-        // 5. Finish
+        // 5. Finish. The SDK's iterator returns quietly (no throw) when its
+        // controller is aborted, so a stalled turn must be reported here or
+        // the client would see a clean `done` for a lesson that died.
+        if (aborted) {
+            return res.end();
+        }
+        if (stalled) {
+            res.write(`data: ${JSON.stringify({ type: "error", message: "The tutor stopped responding." })}\n\n`);
+            return res.end();
+        }
         res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
         res.end();
 
     } catch (error) {
+        if (res.writableEnded) return;
         console.error("Master Brain Error:", error);
         res.write(
           `data: ${JSON.stringify({

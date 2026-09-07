@@ -154,4 +154,22 @@
     box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.4);
     animation-duration: 1s;
   }
+
+  // A broken tutor holds still — pulsing reads as "working".
+  &[data-phase="error"] {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.35);
+    animation: none;
+  }
+}
+
+// Short student-facing failure text beside the red dot.
+.jarvis-status-error {
+  flex: 0 1 auto;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1;
+  color: #ef4444;
 }

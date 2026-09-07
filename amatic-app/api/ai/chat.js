@@ -3,8 +3,8 @@
  * Main conversation handler using Claude Sonnet 4.5
  */
 
-const Anthropic = require("@anthropic-ai/sdk");
 const { CHAT_MODEL } = require("./models");
+const { anthropicFor } = require("../lib/providers");
 
 module.exports = async (req, res) => {
   try {
@@ -44,7 +44,7 @@ module.exports = async (req, res) => {
         .json({ error: "Anthropic API key not configured" });
     }
 
-    const client = new Anthropic({ apiKey });
+    const client = anthropicFor("chat", apiKey);
     const safeSubject =
       subject != null ? String(subject).trim().slice(0, 500) : "";
     const subjectContext = safeSubject

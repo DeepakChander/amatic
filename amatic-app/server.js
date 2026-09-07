@@ -104,9 +104,48 @@ app.use((req, res) => {
   res.status(404).json({ error: "Endpoint not found" });
 });
 
+// ---------------------------------------------------------------------------
+// Process-level safety (docs/18 Phase 1.5)
+// An unhandled rejection or uncaught exception leaves the process in an
+// undefined state. Node already exits on both by default; these handlers add
+// the log line and a bounded drain so in-flight responses get a chance to
+// finish. Restarting is the supervisor's job: `yarn start` runs the backend
+// under nodemon (server:dev); in production use the container runtime.
+// ---------------------------------------------------------------------------
+const SHUTDOWN_GRACE_MS = 5_000;
+let server = null;
+let shuttingDown = false;
+
+function shutdown(code, reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`[Server] shutting down (${reason})`);
+  const forceExit = setTimeout(() => process.exit(code), SHUTDOWN_GRACE_MS);
+  forceExit.unref();
+  if (server) {
+    // Idle keep-alive sockets would otherwise hold close() open for the
+    // whole grace period; active SSE streams get up to SHUTDOWN_GRACE_MS.
+    server.closeIdleConnections?.();
+    server.close(() => process.exit(code));
+  } else {
+    process.exit(code);
+  }
+}
+
+process.on("unhandledRejection", (err) => {
+  console.error("[Server] unhandledRejection", err);
+  shutdown(1, "unhandledRejection");
+});
+process.on("uncaughtException", (err) => {
+  console.error("[Server] uncaughtException", err);
+  shutdown(1, "uncaughtException");
+});
+process.on("SIGTERM", () => shutdown(0, "SIGTERM"));
+process.on("SIGINT", () => shutdown(0, "SIGINT"));
+
 // Start server
-app.listen(PORT, () => {
-  // Server started successfully
+server = app.listen(PORT, () => {
+  console.log(`[Server] Amatic AI backend listening on :${PORT}`);
 });
 
 module.exports = app;

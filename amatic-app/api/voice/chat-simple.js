@@ -3,8 +3,8 @@
  * Thin wrapper for voice chat: accepts { message }, returns { response }.
  */
 
-const Anthropic = require("@anthropic-ai/sdk");
 const { CHAT_MODEL } = require("../ai/models");
+const { anthropicFor } = require("../lib/providers");
 
 module.exports = async (req, res) => {
   try {
@@ -30,7 +30,7 @@ module.exports = async (req, res) => {
         .json({ error: "Anthropic API key not configured" });
     }
 
-    const client = new Anthropic({ apiKey });
+    const client = anthropicFor("chat", apiKey);
 
     const response = await client.messages.create({
       model: CHAT_MODEL,

@@ -8,8 +8,8 @@
  * background so visuals appear on canvas instantly when the student finishes drawing.
  */
 
-const Anthropic = require("@anthropic-ai/sdk");
 const { TEACHING_MODEL } = require("./models");
+const { anthropicFor } = require("../lib/providers");
 
 const SYSTEM_PROMPT = `You are an expert educational AI with deep knowledge across all subjects.
 You are given a small thumbnail of a student's hand-drawn canvas.
@@ -65,7 +65,8 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: "Anthropic API key not configured" });
   }
 
-  // 20-second timeout — recognition is a background operation
+  // Recognition is a background operation: on any failure the client gets an
+  // empty low-confidence brief and the turn falls through to the full path.
   const timeoutResult = {
     topic: "",
     confidence: "low",
@@ -74,14 +75,20 @@ module.exports = async (req, res) => {
     voiceIntro: "",
   };
 
-  let timeoutHandle;
-  const timeoutPromise = new Promise((resolve) => {
-    timeoutHandle = setTimeout(() => resolve(timeoutResult), 20_000);
-  });
+  // Hard 20 s ceiling on the whole request. The SDK retries its own 15 s
+  // per-attempt timeout, so without this an unlucky call could run
+  // (retries + 1) × 15 s; aborting the signal cancels the in-flight attempt
+  // and stops the SDK from retrying, so nothing keeps billing after we reply.
+  const RECOGNIZE_DEADLINE_MS = 20_000;
+  const deadline = new AbortController();
+  const deadlineHandle = setTimeout(
+    () => deadline.abort(),
+    RECOGNIZE_DEADLINE_MS,
+  );
 
-  const recognizePromise = (async () => {
+  const result = await (async () => {
     try {
-      const client = new Anthropic({ apiKey });
+      const client = anthropicFor("recognize", apiKey);
 
       const response = await client.messages.create({
         model: TEACHING_MODEL,
@@ -116,7 +123,7 @@ module.exports = async (req, res) => {
             ],
           },
         ],
-      });
+      }, { signal: deadline.signal });
 
       const rawText = response.content
         ?.find((b) => b.type === "text")
@@ -163,13 +170,16 @@ module.exports = async (req, res) => {
             : "",
       };
     } catch (err) {
-      console.error("[Recognize] Error:", err.message);
+      console.error(
+        deadline.signal.aborted
+          ? `[Recognize] gave up after ${RECOGNIZE_DEADLINE_MS} ms`
+          : `[Recognize] Error: ${err.message}`,
+      );
       return timeoutResult;
+    } finally {
+      clearTimeout(deadlineHandle);
     }
   })();
-
-  const result = await Promise.race([recognizePromise, timeoutPromise]);
-  clearTimeout(timeoutHandle);
 
   res.json(result);
 };

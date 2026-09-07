@@ -4,7 +4,7 @@
  * Streams actual base64 images back via SSE.
  */
 
-const { GoogleGenAI } = require("@google/genai");
+const { geminiFor, budgetFor } = require("../lib/providers");
 
 module.exports = async (req, res) => {
   try {
@@ -61,7 +61,7 @@ module.exports = async (req, res) => {
       })}\n\n`,
     );
 
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = geminiFor("worker", apiKey);
 
     res.write(
       `data: ${JSON.stringify({
@@ -71,25 +71,33 @@ module.exports = async (req, res) => {
       })}\n\n`,
     );
 
-    // Generate all images in parallel — 3-5x faster than sequential
-    const genTimeout = (ms) =>
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Generation timeout")), ms),
-      );
+    // Generate all images in parallel — 3-5x faster than sequential.
+    // Each call carries the worker budget as an abort signal (previously a
+    // local 30 s Promise.race that left the Gemini request running — and
+    // billing — after it lost). A client disconnect cancels them all.
+    const { timeoutMs } = budgetFor("worker");
+    const disconnect = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) disconnect.abort();
+    });
 
     const tasks = Array.from({ length: numVisuals }, (_, i) => {
       const prompt = `Educational illustration for: ${query}, concept ${
         i + 1
       }, hyper-realistic, photorealistic quality. No text overlays or watermarks.`;
 
-      return Promise.race([
-        ai.models.generateContent({
+      return ai.models
+        .generateContent({
           model: "gemini-2.5-flash-image",
           contents: prompt,
-          config: { responseModalities: ["TEXT", "IMAGE"] },
-        }),
-        genTimeout(30_000),
-      ])
+          config: {
+            responseModalities: ["TEXT", "IMAGE"],
+            abortSignal: AbortSignal.any([
+              AbortSignal.timeout(timeoutMs),
+              disconnect.signal,
+            ]),
+          },
+        })
         .then((result) => ({ index: i, result, error: null }))
         .catch((error) => ({ index: i, result: null, error }));
     });

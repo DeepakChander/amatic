@@ -378,7 +378,7 @@ const ExcalidrawWrapper = () => {
 
   const micEnabled = useMicEnabled();
 
-  const { jarvisPhase, currentTranscript } = useCanvasJarvis(
+  const { jarvisPhase, currentTranscript, jarvisError } = useCanvasJarvis(
     excalidrawAPI ?? null,
     micEnabled,
   );
@@ -871,6 +871,7 @@ const ExcalidrawWrapper = () => {
         <AppFooter
           onChange={() => excalidrawAPI?.refresh()}
           jarvisPhase={jarvisPhase}
+          jarvisError={jarvisError}
         />
 
         {isCollaborating && isOffline && (
