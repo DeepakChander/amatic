@@ -373,22 +373,64 @@ export function useCanvasJarvis(
         "x-turn-id": turnId,
       };
       workerQueueRef.current?.close();
+      const dropsByReason: Record<string, number> = {};
       const workerQueue = new WorkerQueue({
         concurrency: MAX_CONCURRENT_WORKERS,
         maxQueued: WORKER_QUEUE_DEPTH,
         circuitThreshold: WORKER_CIRCUIT_THRESHOLD,
         onFailure: (err, n) => recordWorkerFailure(err, turnId, n),
-        onDrop: (reason) => recordWorkerDropped(turnId, reason),
+        onDrop: (reason) => {
+          dropsByReason[reason] = (dropsByReason[reason] ?? 0) + 1;
+          recordWorkerDropped(turnId, reason);
+        },
       });
       workerQueueRef.current = workerQueue;
       // A failure in this turn flips the status dot red and stays until the
       // next turn starts, so a student sees "broken", not "listening".
       let turnFailed = false;
+      let turnError: string | null = null;
       const failTurn = (message: string) => {
         turnFailed = true;
+        turnError = message;
         recordMasterError(turnId, message);
         setJarvisError(message);
         setJarvisPhase("error");
+      };
+      // Per-turn counts for the turn_complete report (docs/18 Phase 2.3).
+      const turnStarted = Date.now();
+      const counts = { voiceSentences: 0, canvasTexts: 0, imagesRequested: 0 };
+      let usedFastPath = false;
+      let turnRecognitionId: string | undefined;
+      const reportTurn = () => {
+        const stats = workerQueue.stats();
+        const outcome = turnFailed
+          ? "error"
+          : abort.signal.aborted
+            ? "aborted"
+            : "done";
+        const body = JSON.stringify({
+          outcome,
+          durationMs: Date.now() - turnStarted,
+          fastPath: usedFastPath,
+          recognitionId: turnRecognitionId,
+          ...counts,
+          workers: {
+            completed: stats.completed,
+            failed: stats.failed,
+            dropped: stats.dropped,
+            droppedByReason: dropsByReason,
+          },
+          error: turnError,
+        });
+        // keepalive lets the report leave even if the tab is closing.
+        fetch("/api/telemetry/turn", {
+          method: "POST",
+          headers: turnHeaders,
+          body,
+          keepalive: true,
+        }).catch(() => {
+          /* telemetry must never surface to the student */
+        });
       };
       setJarvisError(null);
       setJarvisPhase("teaching");
@@ -522,6 +564,7 @@ export function useCanvasJarvis(
         if (abort.signal.aborted) {
           return;
         }
+        counts.imagesRequested++;
         workerQueue.enqueue(async () => {
           if (abort.signal.aborted) {
             return;
@@ -599,8 +642,13 @@ export function useCanvasJarvis(
       // Then call master.js only for voice narration + canvas labels.
       // ------------------------------------------------------------------
       let visualsAlreadyDispatched = false;
+      if (briefIsFresh) {
+        turnRecognitionId = cached!.recognitionId;
+      }
       if (briefIsFresh && cached!.confidence === "high" && cached!.visualBriefs.length > 0) {
+        usedFastPath = true;
         // Queue voice intro and start playing
+        counts.voiceSentences++;
         voiceQueueRef.current.push(cached!.voiceIntro);
         if (!isPlayingVoiceRef.current) {
           isPlayingVoiceRef.current = true;
@@ -666,6 +714,7 @@ export function useCanvasJarvis(
             const data = JSON.parse(m[1].trim());
 
             if (data.type === "voice" && data.text) {
+              counts.voiceSentences++;
               voiceQueueRef.current.push(data.text);
               if (!isPlayingVoiceRef.current) {
                 isPlayingVoiceRef.current = true;
@@ -683,6 +732,7 @@ export function useCanvasJarvis(
               data.content != null &&
               !abort.signal.aborted
             ) {
+              counts.canvasTexts++;
               const fontSize =
                 typeof data.fontSize === "number" ? data.fontSize : 24;
               const textEl = {
@@ -767,6 +817,9 @@ export function useCanvasJarvis(
         canvasMonitor?.markTeachingComplete();
         // Persist memory after every teaching session
         spatialMemory.saveToStorage();
+        // Workers may still be rendering; their own requests carry the same
+        // turnId, so the report is the turn's end from the student's side.
+        reportTurn();
         // Shared state belongs to whichever turn is current. When this turn
         // was interrupted by a newer one, that turn already owns the abort
         // ref, the cooldown and the status dot — a stale finally must not

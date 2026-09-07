@@ -5,8 +5,13 @@
  */
 
 const { geminiFor } = require("../lib/providers");
+const { recordImageCall } = require("../lib/cost");
 
 module.exports = async (req, res) => {
+  // Declared outside the try so the catch can report real latency and tell
+  // a client disconnect from a provider failure.
+  const startTime = Date.now();
+  let disconnect = null;
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed" });
@@ -36,12 +41,11 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: "Gemini API key not configured" });
     }
 
-    const startTime = Date.now();
     // 60 s timeout, 2 retries on 429/5xx (Phase 1.3). A client that gives up
     // (turn interrupted, tab closed) cancels the generation instead of
     // paying for an image nobody will see.
     const ai = geminiFor("worker", apiKey);
-    const disconnect = new AbortController();
+    disconnect = new AbortController();
     res.on("close", () => {
       if (!res.writableEnded) disconnect.abort();
     });
@@ -83,6 +87,7 @@ No text overlays or watermarks.`;
     }
 
     if (!imageBase64) {
+      recordImageCall(req.log, { latencyMs: generationTime, outcome: "empty" });
       return res.status(500).json({
         workerId,
         status: "error",
@@ -92,7 +97,7 @@ No text overlays or watermarks.`;
       });
     }
 
-    console.log(`[Worker-${workerId}] Generated in ${generationTime}ms`);
+    recordImageCall(req.log, { latencyMs: generationTime, outcome: "ok" });
 
     res.json({
       workerId,
@@ -106,11 +111,17 @@ No text overlays or watermarks.`;
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    if (res.writableEnded || res.destroyed) return; // client already gone
+    const clientGone = !!disconnect?.signal.aborted;
+    recordImageCall(req.log, {
+      latencyMs: Date.now() - startTime,
+      outcome: clientGone ? "aborted" : "error",
+      error,
+    });
+    if (clientGone || res.writableEnded || res.destroyed) return; // client already gone
     const workerId = req.params?.id
       ? parseInt(req.params.id, 10)
       : req.body?.workerId || 1;
-    console.error(`[Worker-${workerId}] Error:`, error);
+    req.log.error({ err: error, event: "worker_error", workerId }, "image generation failed");
     res.status(500).json({
       workerId,
       status: "error",

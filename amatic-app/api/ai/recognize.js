@@ -10,6 +10,8 @@
 
 const { TEACHING_MODEL } = require("./models");
 const { anthropicFor } = require("../lib/providers");
+const { recordLlmCall } = require("../lib/cost");
+const metrics = require("../lib/metrics");
 
 const SYSTEM_PROMPT = `You are an expert educational AI with deep knowledge across all subjects.
 You are given a small thumbnail of a student's hand-drawn canvas.
@@ -86,11 +88,14 @@ module.exports = async (req, res) => {
     RECOGNIZE_DEADLINE_MS,
   );
 
+  const log = req.log;
+  const started = Date.now();
   const result = await (async () => {
+    let response = null;
     try {
       const client = anthropicFor("recognize", apiKey);
 
-      const response = await client.messages.create({
+      response = await client.messages.create({
         model: TEACHING_MODEL,
         // Raised from 2000: on Sonnet 5 thinking shares the max_tokens budget,
         // and a tight cap risks spending it on thinking and truncating the JSON
@@ -125,6 +130,14 @@ module.exports = async (req, res) => {
         ],
       }, { signal: deadline.signal });
 
+      recordLlmCall(log, {
+        route: "recognize",
+        model: TEACHING_MODEL,
+        usage: response.usage,
+        latencyMs: Date.now() - started,
+        ok: true,
+      });
+
       const rawText = response.content
         ?.find((b) => b.type === "text")
         ?.text?.trim() ?? "";
@@ -137,12 +150,25 @@ module.exports = async (req, res) => {
 
       const brief = JSON.parse(jsonText);
 
+      const confidence = ["high", "medium", "low"].includes(brief.confidence)
+        ? brief.confidence
+        : "low";
+      // The metric that says whether recognition works at all.
+      metrics.recognizeConfidence.inc({ level: confidence });
+      log.info(
+        {
+          event: "recognize_complete",
+          confidence,
+          topic: typeof brief.topic === "string" ? brief.topic.slice(0, 80) : "",
+          visual_briefs: Array.isArray(brief.visualBriefs) ? brief.visualBriefs.length : 0,
+        },
+        "drawing recognized",
+      );
+
       // Validate and sanitize the response shape
       return {
         topic: typeof brief.topic === "string" ? brief.topic : "",
-        confidence: ["high", "medium", "low"].includes(brief.confidence)
-          ? brief.confidence
-          : "low",
+        confidence,
         visualBriefs: Array.isArray(brief.visualBriefs)
           ? brief.visualBriefs
               .filter(
@@ -170,10 +196,32 @@ module.exports = async (req, res) => {
             : "",
       };
     } catch (err) {
-      console.error(
-        deadline.signal.aborted
-          ? `[Recognize] gave up after ${RECOGNIZE_DEADLINE_MS} ms`
-          : `[Recognize] Error: ${err.message}`,
+      // Two failure classes share this path: the provider call failed (no
+      // response) or it answered with something that is not the brief
+      // schema (parse/validation). Both count as a failed recognition.
+      metrics.recognizeConfidence.inc({ level: "failed" });
+      if (!response) {
+        recordLlmCall(log, {
+          route: "recognize",
+          model: TEACHING_MODEL,
+          usage: null,
+          latencyMs: Date.now() - started,
+          ok: false,
+          error: err,
+        });
+      }
+      log.warn(
+        {
+          event: "recognize_failed",
+          reason: deadline.signal.aborted
+            ? "deadline"
+            : response
+              ? "unparseable_brief"
+              : "provider_error",
+          err: err.message,
+          deadline_ms: RECOGNIZE_DEADLINE_MS,
+        },
+        "recognition failed, returning empty brief",
       );
       return timeoutResult;
     } finally {

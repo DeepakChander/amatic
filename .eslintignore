@@ -12,3 +12,4 @@ coverage
 amatic-app/api/ai/*.js
 amatic-app/api/voice/*.js
 amatic-app/api/lib/*.js
+amatic-app/api/telemetry/*.js

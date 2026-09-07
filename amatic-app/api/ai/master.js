@@ -10,6 +10,8 @@
 
 const { TEACHING_MODEL } = require("./models");
 const { anthropicFor, budgetFor } = require("../lib/providers");
+const { recordLlmCall } = require("../lib/cost");
+const metrics = require("../lib/metrics");
 
 // ---------------------------------------------------------------------------
 // Lightweight content-type classifier (inline, no dependencies)
@@ -47,6 +49,36 @@ module.exports = async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+
+    const log = req.log;
+    // Set by the res 'close' handler below; declared here so the catch block
+    // can tell a client disconnect from a provider error.
+    let aborted = false;
+    // Usage accumulates across the stream: input tokens arrive on
+    // message_start, output tokens on the final message_delta.
+    const usage = {};
+    const callStarted = Date.now();
+    let callRecorded = false;
+    const recordCall = (outcome, error) => {
+        if (callRecorded) return;
+        callRecorded = true;
+        recordLlmCall(log, {
+            route: "master",
+            model: TEACHING_MODEL,
+            usage: Object.keys(usage).length ? usage : null,
+            latencyMs: Date.now() - callStarted,
+            outcome,
+            error,
+        });
+    };
+    // Usage fields on message_start / message_delta are `number | null` and
+    // null means "not applicable here", so never let a null overwrite a
+    // value already captured — the SDK's own accumulator guards the same way.
+    const mergeUsage = (u) => {
+        for (const [k, v] of Object.entries(u || {})) {
+            if (v != null) usage[k] = v;
+        }
+    };
 
     try {
         const {
@@ -93,12 +125,11 @@ module.exports = async (req, res) => {
         // fires when the connection drops before the response ended.
         // Registered *before* the provider call so a disconnect during the
         // initial request cancels it too.
-        let aborted = false;
         const upstream = new AbortController();
         res.on("close", () => {
             if (res.writableEnded) return;
             aborted = true;
-            console.log("[Master] Client disconnected, aborting stream");
+            log.info({ event: "client_disconnect" }, "client disconnected, aborting stream");
             upstream.abort();
         });
 
@@ -299,7 +330,7 @@ RULES:
             if (idleTimer) clearTimeout(idleTimer);
             idleTimer = setTimeout(() => {
                 stalled = true;
-                console.warn(`[Master] no delta for ${STREAM_IDLE_MS} ms, aborting stream`);
+                log.warn({ event: "stream_stalled", idle_ms: STREAM_IDLE_MS }, "no delta, aborting stream");
                 upstream.abort();
             }, STREAM_IDLE_MS);
         };
@@ -373,17 +404,20 @@ RULES:
                     if (obj && typeof obj.type === "string") emitParsed(obj);
                 } catch (err) {
                     // Complete but invalid: surface it instead of dropping
-                    // student-facing content silently.
-                    console.warn(
-                        "[Master] discarded malformed object:",
-                        slice.length > 200 ? `${slice.slice(0, 200)}…` : slice,
+                    // student-facing content silently. Only the length is
+                    // logged — the content may be student-facing text.
+                    metrics.parserRejects.inc();
+                    log.warn(
+                        { event: "parser_reject", chars: slice.length, err: err.message },
+                        "discarded malformed object from model stream",
                     );
                 }
                 rest = rest.slice(end + 1);
             }
             if (rest.length > MAX_BUFFER_CHARS) {
                 // An unterminated object must not pin memory for the whole stream.
-                console.warn("[Master] parse buffer overflow, resetting");
+                metrics.parserRejects.inc();
+                log.warn({ event: "parser_overflow", chars: rest.length }, "parse buffer overflow, resetting");
                 rest = "";
             }
             buffer = rest;
@@ -397,12 +431,24 @@ RULES:
                 if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
                     buffer += chunk.delta.text || "";
                     tryParseBuffer();
+                } else if (chunk.type === 'message_start' && chunk.message?.usage) {
+                    mergeUsage(chunk.message.usage);
+                } else if (chunk.type === 'message_delta' && chunk.usage) {
+                    // Final output count (thinking included) arrives here.
+                    mergeUsage(chunk.usage);
                 }
             }
         } finally {
             if (idleTimer) clearTimeout(idleTimer);
         }
         tryParseBuffer();
+        if (stalled) {
+            recordCall("aborted", new Error("stream stalled"));
+        } else if (aborted) {
+            recordCall("aborted", new Error("client disconnected"));
+        } else {
+            recordCall("ok");
+        }
 
         // 5. Finish. The SDK's iterator returns quietly (no throw) when its
         // controller is aborted, so a stalled turn must be reported here or
@@ -418,8 +464,9 @@ RULES:
         res.end();
 
     } catch (error) {
+        recordCall(aborted ? "aborted" : "error", error);
         if (res.writableEnded) return;
-        console.error("Master Brain Error:", error);
+        log.error({ err: error, event: "master_error", status: error?.status ?? null }, "master turn failed");
         res.write(
           `data: ${JSON.stringify({
             type: "error",

@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("STT error:", error);
+    req.log.error({ err: error, event: "stt_error" }, "transcription failed");
     res.status(500).json({
       error: "Failed to transcribe",
       ...(process.env.NODE_ENV === "production"

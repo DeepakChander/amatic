@@ -5,6 +5,7 @@
  */
 
 const { geminiFor, budgetFor } = require("../lib/providers");
+const { recordImageCall } = require("../lib/cost");
 
 module.exports = async (req, res) => {
   try {
@@ -86,6 +87,7 @@ module.exports = async (req, res) => {
         i + 1
       }, hyper-realistic, photorealistic quality. No text overlays or watermarks.`;
 
+      const started = Date.now();
       return ai.models
         .generateContent({
           model: "gemini-2.5-flash-image",
@@ -98,15 +100,15 @@ module.exports = async (req, res) => {
             ]),
           },
         })
-        .then((result) => ({ index: i, result, error: null }))
-        .catch((error) => ({ index: i, result: null, error }));
+        .then((result) => ({ index: i, result, error: null, latencyMs: Date.now() - started }))
+        .catch((error) => ({ index: i, result: null, error, latencyMs: Date.now() - started }));
     });
 
     const results = await Promise.all(tasks);
 
-    for (const { index, result, error } of results) {
+    for (const { index, result, error, latencyMs } of results) {
       if (error) {
-        console.error(`Worker ${index} error:`, error);
+        recordImageCall(req.log, { latencyMs, outcome: "error", error });
         res.write(
           `data: ${JSON.stringify({
             type: "visual",
@@ -135,6 +137,7 @@ module.exports = async (req, res) => {
           }
         }
       }
+      recordImageCall(req.log, { latencyMs, outcome: imageBase64 ? "ok" : "empty" });
 
       res.write(
         `data: ${JSON.stringify({
@@ -153,7 +156,8 @@ module.exports = async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
     res.end();
   } catch (error) {
-    console.error("Orchestration error:", error);
+    req.log.error({ err: error, event: "orchestrate_error" }, "orchestration failed");
+    if (res.writableEnded) return;
     res.write(
       `data: ${JSON.stringify({
         type: "error",

@@ -4,8 +4,11 @@
  */
 
 const { elevenLabsFor, collectAudio } = require("../lib/providers");
+const { recordTtsCall } = require("../lib/cost");
 
 module.exports = async (req, res) => {
+  const started = Date.now();
+  let characters = 0;
   try {
     // Validate HTTP method
     if (req.method !== "POST") {
@@ -13,6 +16,7 @@ module.exports = async (req, res) => {
     }
 
     const { text, voiceId, lang } = req.body;
+    characters = typeof text === "string" ? text.length : 0;
 
     // Validate text
     if (!text || typeof text !== "string") {
@@ -35,8 +39,6 @@ module.exports = async (req, res) => {
     const { client, requestOptions, timeoutMs } = elevenLabsFor("tts", apiKey);
     const selectedVoice = voiceId || "EXAVITQu4vr4xnSDxMaL"; // Bella
 
-    console.log(`[TTS] Generating speech for ${text.length} characters (lang: ${lang || "en-US"})...`);
-
     const streamResponse = await client.textToSpeech.convertAsStream(
       selectedVoice,
       {
@@ -58,14 +60,24 @@ module.exports = async (req, res) => {
     const audioStream = streamResponse.data ?? streamResponse;
     const buffer = await collectAudio(audioStream, timeoutMs, "TTS body");
 
-    console.log(`[TTS] Generated ${buffer.length} bytes of audio`);
+    recordTtsCall(req.log, {
+      characters,
+      bytes: buffer.length,
+      latencyMs: Date.now() - started,
+      ok: true,
+    });
 
     // Return audio
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Length", buffer.length);
     res.send(buffer);
   } catch (error) {
-    console.error("TTS error:", error);
+    recordTtsCall(req.log, {
+      characters,
+      latencyMs: Date.now() - started,
+      ok: false,
+      error,
+    });
     res.status(500).json({
       error: "Failed to generate speech",
       ...(process.env.NODE_ENV === "production"

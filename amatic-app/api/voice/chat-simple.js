@@ -5,6 +5,7 @@
 
 const { CHAT_MODEL } = require("../ai/models");
 const { anthropicFor } = require("../lib/providers");
+const { recordLlmCall } = require("../lib/cost");
 
 module.exports = async (req, res) => {
   try {
@@ -32,14 +33,22 @@ module.exports = async (req, res) => {
 
     const client = anthropicFor("chat", apiKey);
 
-    const response = await client.messages.create({
-      model: CHAT_MODEL,
-      max_tokens: 8000, // raised: thinking shares this budget on Sonnet 5
-      // temperature removed — Sonnet 5 400s on non-default sampling params.
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low" },
-      messages: [{ role: "user", content: message }],
-    });
+    const started = Date.now();
+    let response;
+    try {
+      response = await client.messages.create({
+        model: CHAT_MODEL,
+        max_tokens: 8000, // raised: thinking shares this budget on Sonnet 5
+        // temperature removed — Sonnet 5 400s on non-default sampling params.
+        thinking: { type: "adaptive" },
+        output_config: { effort: "low" },
+        messages: [{ role: "user", content: message }],
+      });
+    } catch (error) {
+      recordLlmCall(req.log, { route: "chat", model: CHAT_MODEL, usage: null, latencyMs: Date.now() - started, ok: false, error });
+      throw error;
+    }
+    recordLlmCall(req.log, { route: "chat", model: CHAT_MODEL, usage: response.usage, latencyMs: Date.now() - started, ok: true });
 
     const textBlock = response.content?.find((b) => b.type === "text");
     const content = textBlock && "text" in textBlock ? textBlock.text : "";
@@ -51,7 +60,7 @@ module.exports = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Chat simple error:", error);
+    req.log.error({ err: error, event: "chat_simple_error" }, "chat failed");
     res.status(500).json({
       error: "Failed to generate response",
       ...(process.env.NODE_ENV === "production"
