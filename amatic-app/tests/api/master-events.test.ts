@@ -169,6 +169,8 @@ describe("tools-mode parser", () => {
       ...c,
       onText: (n: number) => (chars += n),
     });
+    // The tools parser still consumes raw provider chunks; only the JSON
+    // parser takes normalized text.
     for (const ch of textChunks("Let me explain the heart.")) {
       p.feed(ch);
     }
@@ -226,7 +228,7 @@ describe("json-mode parser (ADR-003 scanner)", () => {
       JSON.stringify({ type: "done" }),
     ].join("\n");
     for (const ch of textChunks(text, 7)) {
-      p.feed(ch);
+      p.feed(ch.delta.text);
     }
     p.flush();
     expect(c.rejects).toEqual([]);
@@ -260,7 +262,7 @@ describe("json-mode parser (ADR-003 scanner)", () => {
       text: "Type } to close the block, or { to open one.",
     });
     for (const ch of textChunks(text, 5)) {
-      p.feed(ch);
+      p.feed(ch.delta.text);
     }
     p.flush();
     expect(c.out).toHaveLength(1);
@@ -271,7 +273,7 @@ describe("json-mode parser (ADR-003 scanner)", () => {
     const c = collect();
     const p = events.createJsonEventParser(c);
     for (const ch of textChunks('{"type": "voice", "text": tru}', 2)) {
-      p.feed(ch);
+      p.feed(ch.delta.text);
     }
     p.flush();
     expect(c.out).toEqual([]);

@@ -225,12 +225,26 @@ module.exports = async (req, res) => {
             pointedElement ? `POINTED ELEMENT (selected/hovered): ${pointedElement}` : "",
             voiceTranscript ? `VOICE TRANSCRIPT: "${voiceTranscript}"` : "",
             memoryContext ? `MEMORY (previous teaching this session):\n${memoryContext}` : "",
+            // Small local models reliably lose rule 2 ("voice first") in an
+            // 1,100-token system prompt — measured: qwen2.5vl:3b emitted
+            // visual_prompt and canvas_text but no voice at all. Restating the
+            // one rule that matters most at the very end, where recency helps,
+            // is what makes narration actually arrive. Hosted models already
+            // comply, so this only goes to the providers that need it.
+            provider === "ollama"
+                ? `BEGIN NOW. Your FIRST line must be a voice event:\n{ "type": "voice", "text": "<one short spoken sentence about ${message.slice(0, 60)}>" }\nEmit 3-5 voice events total, then canvas_text labels, then { "type": "done" }. Output nothing but JSON objects, one per line.`
+                : "",
         ].filter(Boolean).join("\n\n");
 
-        // 2. Build multimodal message content
-        // If a canvas image was provided, Claude sees the actual drawing
+        // 2. Build multimodal message content.
+        // The image is attached only where looking at it is affordable — on a
+        // CPU-only local provider it costs ~70 s per turn (llm.supportsVision),
+        // and the canvas element descriptions in userPrompt already say what is
+        // on the canvas. Dropping the image there is the difference between a
+        // usable tutor and an unusable one.
+        const useVision = llm.supportsVision(provider);
         const userContent = [];
-        if (canvasImage && typeof canvasImage === "string" && canvasImage.length > 0) {
+        if (useVision && canvasImage && typeof canvasImage === "string" && canvasImage.length > 0) {
             userContent.push({
                 type: "image",
                 source: {

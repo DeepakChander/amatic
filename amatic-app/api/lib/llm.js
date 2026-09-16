@@ -46,6 +46,24 @@ function resolveLlmProvider(raw = process.env.LLM_PROVIDER) {
 
 const OLLAMA_URL = () => (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/+$/, "");
 
+/**
+ * Can this provider look at the canvas image?
+ *
+ * Measured on the target machine (CPU only, no usable GPU): a 240x220 JPEG
+ * costs ~1,090 vision tokens and **70 seconds** to encode, against a 3-second
+ * debounce — while text generation on the same model runs at a perfectly
+ * usable ~16 tokens/sec. So vision is off by default on the local provider:
+ * the turn instead relies on the canvas element descriptions the client
+ * already sends, which cost nothing extra.
+ *
+ * Set OLLAMA_VISION=1 to turn it back on if you have a GPU, and expect
+ * recognition to work but each turn to take over a minute.
+ */
+function supportsVision(provider = resolveLlmProvider()) {
+  if (provider !== "ollama") return true;
+  return process.env.OLLAMA_VISION === "1";
+}
+
 /** The model id a route will actually call, for logging and cost attribution. */
 function modelFor(route, provider = resolveLlmProvider()) {
   const teaching = route === "master" || route === "recognize";
@@ -544,6 +562,7 @@ module.exports = {
   stream,
   generate,
   resolveLlmProvider,
+  supportsVision,
   modelFor,
   apiKeyFor,
   probeLlm,

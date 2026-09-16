@@ -322,13 +322,15 @@ function createJsonEventParser({ onEvent, onReject = () => {} }) {
   };
 
   return {
-    feed(chunk) {
-      if (chunk.type === "content_block_delta" && chunk.delta?.type === "text_delta") {
-        buffer += chunk.delta.text || "";
-        drain();
-        return true;
-      }
-      return false;
+    /**
+     * Feed incremental model text. Takes a plain string: providers differ in
+     * chunk shape, so api/lib/llm.js normalizes to text before this sees it.
+     */
+    feed(text) {
+      if (typeof text !== "string" || text === "") return false;
+      buffer += text;
+      drain();
+      return true;
     },
     /** Call once after the stream ends. */
     flush() {

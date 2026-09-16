@@ -106,6 +106,26 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: `${keyName} not configured` });
   }
 
+  // Recognition is the one step that cannot work without vision. On a
+  // provider where looking at the image costs ~70 s (see llm.supportsVision),
+  // answering immediately with an empty brief is far better than making the
+  // student wait: the turn falls through to the full path, which teaches from
+  // the canvas element descriptions instead.
+  if (!llm.supportsVision(provider)) {
+    metrics.recognizeConfidence.inc({ level: "skipped" });
+    req.log.info(
+      { event: "recognize_skipped", provider, reason: "vision disabled for this provider" },
+      "skipping drawing recognition; teaching from canvas context instead",
+    );
+    return res.json({
+      topic: "",
+      confidence: "low",
+      visualBriefs: [],
+      canvasLabels: [],
+      voiceIntro: "",
+    });
+  }
+
   // Recognition is a background operation: on any failure the client gets an
   // empty low-confidence brief and the turn falls through to the full path.
   const timeoutResult = {
@@ -232,7 +252,8 @@ module.exports = async (req, res) => {
       if (!response) {
         recordLlmCall(log, {
           route: "recognize",
-          model: TEACHING_MODEL,
+          provider,
+          model,
           usage: null,
           latencyMs: Date.now() - started,
           ok: false,
