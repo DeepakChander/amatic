@@ -62,10 +62,16 @@ Worth adding `nodemon` for the backend — see [18](18-implementation-plan.md) P
 node --check amatic-app/api/ai/master.js
 ```
 
-### 3. Use `corepack yarn`, never `npm install`
+### 3. Use `corepack yarn --frozen-lockfile`, never `npm install`
 
 `npm install` creates a `package-lock.json` beside `yarn.lock` and breaks workspace
 resolution. The pin is `yarn@1.22.22`.
+
+Always pass `--frozen-lockfile`. A bare `yarn install` rewrites the lockfile, and the
+rewrite this tree produces is semver-invalid: `strip-ansi@^7.0.1` gets folded into the
+`strip-ansi@6.0.1` entry, handing a 7.x (ESM) consumer a 6.x (CJS) module. Revert any
+unexplained `yarn.lock` diff that appears after an install you did not intend as a
+dependency change.
 
 ### 4. Version control exists — use it
 

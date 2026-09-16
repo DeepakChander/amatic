@@ -15,17 +15,28 @@
 ## 1. Install
 
 ```bash
-corepack yarn install     # or: yarn install
+corepack yarn install --frozen-lockfile
 ```
 
-Expect radix-ui peer-dependency warnings and a `husky install` failure
-(`fatal: not a git repository`). Both are pre-existing and harmless.
+**Use `--frozen-lockfile`.** A bare `yarn install` rewrites `yarn.lock`, and on this
+dependency tree the rewrite is wrong: it collapses `strip-ansi@^7.0.1` into the
+`strip-ansi@6.0.1` entry, so a caller asking for 7.x (ESM) silently gets 6.x (CJS).
+The committed lockfile installs cleanly frozen — if that ever fails, a dependency
+genuinely changed and the lockfile needs a deliberate update.
+
+Expect radix-ui peer-dependency warnings; they are pre-existing and harmless. `husky
+install` succeeds inside the repo and fails harmlessly (`fatal: not a git repository`)
+outside it.
 
 ## 2. Create `.env.local`
 
 `amatic-app/server.js` loads `../.env.local` — that resolves to **`amatic-main/.env.local`**,
-a sibling of the root `package.json`. **Not** inside `amatic-app/`. It is not committed and
-not generated; you must create it by hand.
+a sibling of the root `package.json`. **Not** inside `amatic-app/`. It is not committed.
+Start from the template, which documents every variable:
+
+```bash
+cp .env.example .env.local     # then paste your three keys in
+```
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...      # teaching brain + drawing recognition
