@@ -5,6 +5,10 @@ interface ImportMetaEnv {
   // The port to run the dev server
   VITE_APP_PORT: string;
 
+  // Max generated images per teaching turn (docs/18 Phase 3.3 interim cost
+  // cap). Unset = 1. Raise once the diagram library covers common topics.
+  VITE_MAX_IMAGES_PER_TURN?: string;
+
   VITE_APP_BACKEND_V2_GET_URL: string;
   VITE_APP_BACKEND_V2_POST_URL: string;
 

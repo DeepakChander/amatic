@@ -77,7 +77,7 @@ const parserRejects = new client.Counter({
 
 const workerDropped = new client.Counter({
   name: "amatic_worker_dropped_total",
-  help: "Image workers the client refused to dispatch, by reason (full|circuit|closed)",
+  help: "Image workers the client refused to dispatch, by reason (full|circuit|closed|cap — cap = per-turn image budget)",
   labelNames: ["reason"],
   registers: [registry],
 });
@@ -90,8 +90,29 @@ const ttsCharacters = new client.Counter({
 
 const imagesGenerated = new client.Counter({
   name: "amatic_images_generated_total",
-  help: "Images returned by the image provider, by outcome (ok|empty|error|aborted)",
+  help: "Images served, by outcome (ok|empty|error|aborted|library — library = vetted diagram, no provider call)",
   labelNames: ["outcome"],
+  registers: [registry],
+});
+
+const masterEvents = new client.Counter({
+  name: "amatic_master_events_total",
+  help: "Student-facing events extracted from the master stream, by output mode (json|tools) and type — compare modes here before switching the default",
+  labelNames: ["mode", "type"],
+  registers: [registry],
+});
+
+const masterRounds = new client.Counter({
+  name: "amatic_master_rounds_total",
+  help: "Model rounds per master turn, by output mode (tools mode may take several: call tools, acknowledge, continue)",
+  labelNames: ["mode"],
+  registers: [registry],
+});
+
+const ttsCache = new client.Counter({
+  name: "amatic_tts_cache_total",
+  help: "TTS cache lookups, by result (hit|miss)",
+  labelNames: ["result"],
   registers: [registry],
 });
 
@@ -115,4 +136,7 @@ module.exports = {
   workerDropped,
   ttsCharacters,
   imagesGenerated,
+  masterEvents,
+  masterRounds,
+  ttsCache,
 };

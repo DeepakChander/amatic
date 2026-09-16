@@ -40,9 +40,16 @@ Optional:
 | `AI_SERVER_PORT` | 3001 | backend port |
 | `VITE_APP_PORT` | 3000 | frontend port |
 | `NODE_ENV` | — | `production` suppresses error detail in API responses |
+| `LOG_LEVEL` / `LOG_PRETTY` | `info` / off | pino log level; `LOG_PRETTY=1` for readable terminal logs |
+| `MASTER_OUTPUT_MODE` | `json` | `tools` switches the teaching brain to typed tool calls ([04](04-api-reference.md)) |
+| `TTS_PROVIDER` | `elevenlabs` | `kokoro` runs speech locally; `ELEVENLABS_API_KEY` then optional ([08](08-voice-pipeline.md)) |
+| `KOKORO_VOICE` / `KOKORO_DTYPE` | `af_heart` / `q8` | Kokoro voice and model precision |
+| `TTS_CACHE_DIR` / `TTS_CACHE_MAX_MB` | `amatic-app/.cache/tts` / 200 | synthesized-audio cache |
+| `DIAGRAM_LIBRARY_DIR` | `amatic-app/diagram-library` | vetted diagrams served instead of generating |
+| `VITE_MAX_IMAGES_PER_TURN` | 1 | generated images per teaching turn (client-side cap) |
 
-Without this file the canvas still works fully. Every AI feature fails silently from the
-user's point of view — the status dot never leaves `watching`.
+Without this file the canvas still works fully. AI turns fail visibly: the status dot turns
+red with the reason ("API Key missing"), and `/readyz` reports which provider is missing.
 
 ## 3. Run
 

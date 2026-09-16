@@ -13,7 +13,7 @@
 const metrics = require("../lib/metrics");
 
 const OUTCOMES = new Set(["done", "error", "aborted"]);
-const DROP_REASONS = new Set(["full", "circuit", "closed"]);
+const DROP_REASONS = new Set(["full", "circuit", "closed", "cap"]);
 
 const int = (v, max = 10_000) =>
   Number.isFinite(v) && v >= 0 ? Math.min(Math.round(v), max) : 0;

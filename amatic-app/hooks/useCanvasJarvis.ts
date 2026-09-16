@@ -291,6 +291,21 @@ const MAX_CONCURRENT_WORKERS = 3;
 const WORKER_QUEUE_DEPTH = 5;
 /** Consecutive worker failures before the turn stops dispatching images. */
 const WORKER_CIRCUIT_THRESHOLD = 3;
+/** Images generated per turn (docs/18 Phase 3.3 interim). Image generation is
+ *  the dominant cost line and a generated diagram is often subtly wrong, so
+ *  the default is one per turn until the vetted diagram library covers the
+ *  common topics. Vetted-library hits are cheap but count too — the cap is on
+ *  requests, since the client cannot know which will hit. */
+const MAX_IMAGES_PER_TURN = (() => {
+  // A blank value in .env.local is how people "unset" a var, and Number("")
+  // is 0 — which would silently turn every image off. Treat blank as unset.
+  const raw = import.meta.env.VITE_MAX_IMAGES_PER_TURN?.trim();
+  if (!raw) {
+    return 1;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : 1;
+})();
 /** Brief is considered fresh for 30 seconds after recognition */
 const BRIEF_TTL_MS = 30_000;
 /** Shown when the backend reports a failure without a usable message. */
@@ -560,8 +575,17 @@ export function useCanvasJarvis(
       // briefs 4-5 of a turn used to be silently discarded here. One failure
       // no longer blocks later images; only WORKER_CIRCUIT_THRESHOLD
       // consecutive failures stop the turn's dispatch.
-      const dispatchWorker = (prompt: string, style: string) => {
+      const dispatchWorker = (
+        prompt: string,
+        style: string,
+        hint?: { topic?: string; title?: string },
+      ) => {
         if (abort.signal.aborted) {
+          return;
+        }
+        if (counts.imagesRequested >= MAX_IMAGES_PER_TURN) {
+          dropsByReason.cap = (dropsByReason.cap ?? 0) + 1;
+          recordWorkerDropped(turnId, "cap");
           return;
         }
         counts.imagesRequested++;
@@ -573,7 +597,15 @@ export function useCanvasJarvis(
             const workerRes = await fetch("/api/ai/worker", {
               method: "POST",
               headers: turnHeaders,
-              body: JSON.stringify({ prompt, style: style || "schematic", workerId: 1 }),
+              // topic/title let the backend serve a human-vetted diagram
+              // from the library instead of generating (Phase 3.3).
+              body: JSON.stringify({
+                prompt,
+                style: style || "schematic",
+                workerId: 1,
+                topic: hint?.topic,
+                title: hint?.title,
+              }),
               signal: abort.signal,
             });
             if (!workerRes.ok) {
@@ -657,7 +689,10 @@ export function useCanvasJarvis(
         // Dispatch all pre-built Gemini prompts. The queue runs three at a
         // time and holds the rest, so a 5-brief topic renders all 5.
         for (const vb of cached!.visualBriefs) {
-          dispatchWorker(vb.prompt, vb.style);
+          dispatchWorker(vb.prompt, vb.style, {
+            topic: cached!.topic,
+            title: vb.title,
+          });
         }
         visualsAlreadyDispatched = true;
         // Consume the cache so a second trigger goes through full path
@@ -726,7 +761,9 @@ export function useCanvasJarvis(
               !abort.signal.aborted &&
               !visualsAlreadyDispatched // skip if fast path already dispatched
             ) {
-              dispatchWorker(data.prompt, data.style || "schematic");
+              dispatchWorker(data.prompt, data.style || "schematic", {
+                topic: briefIsFresh ? cached!.topic : undefined,
+              });
             } else if (
               data.type === "canvas_text" &&
               data.content != null &&

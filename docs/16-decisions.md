@@ -74,6 +74,12 @@ dependency wasn't warranted. Reconsider if the event schema grows.
 **Better long-term.** Structured outputs (`output_config.format`) or a tool call would
 remove hand-parsing entirely. See [18](18-implementation-plan.md) Phase 3.
 
+**Update 2026-09-07.** Phase 3.2 landed the tool-call path as `MASTER_OUTPUT_MODE=tools`
+(`api/lib/master-events.js`), with this scanner still the default behind
+`MASTER_OUTPUT_MODE=json`. Both produce identical normalized events and are unit-tested
+side by side. The scanner is retired once a real session shows equal event counts in
+`amatic_master_events_total` for both modes. Until then, do not regress this.
+
 ---
 
 ## ADR-004 — The 1M-context beta flags were removed, not relocated

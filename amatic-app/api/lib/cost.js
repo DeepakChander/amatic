@@ -103,26 +103,45 @@ function recordLlmCall(log, { route, model, usage, latencyMs, ok, outcome, error
 }
 
 /**
- * Record one Gemini image generation. Counted, not costed (rate unknown).
- * outcome: ok | empty | error | aborted (client went away).
+ * Record one image request. Counted, not costed (image rate unknown).
+ *
+ * outcome: ok | empty | error | aborted (client went away) | library (served
+ * from the vetted diagram library — no provider call happened at all, so it
+ * must not touch the Gemini call/latency series; that is the whole point of
+ * the library and counting it as a failed Gemini call would invert the signal).
  */
+const IMAGE_CALL_OUTCOMES = { ok: "ok", aborted: "aborted" };
+
 function recordImageCall(log, { latencyMs, outcome, error }) {
-  const callOutcome = outcome === "ok" ? "ok" : outcome === "aborted" ? "aborted" : "error";
+  metrics.imagesGenerated.inc({ outcome });
+  if (outcome === "library") {
+    log.info(
+      { event: "image_call", source: "library", latency_ms: Math.round(latencyMs), outcome },
+      "image served from vetted diagram library",
+    );
+    return;
+  }
+  const callOutcome = IMAGE_CALL_OUTCOMES[outcome] || "error";
   metrics.llmCalls.inc({ route: "worker", provider: "gemini", outcome: callOutcome });
   metrics.llmLatency.observe({ route: "worker", provider: "gemini" }, latencyMs);
-  metrics.imagesGenerated.inc({ outcome });
   const fields = { event: "image_call", provider: "gemini", latency_ms: Math.round(latencyMs), outcome };
   if (outcome === "ok") log.info(fields, "image call complete");
   else if (outcome === "aborted") log.info(fields, "image call aborted by client");
   else log.warn({ ...fields, err: error?.message }, "image call failed");
 }
 
-/** Record one ElevenLabs synthesis. Counted by characters, not costed. */
-function recordTtsCall(log, { characters, bytes, latencyMs, ok, error }) {
-  metrics.llmCalls.inc({ route: "tts", provider: "elevenlabs", outcome: ok ? "ok" : "error" });
-  metrics.llmLatency.observe({ route: "tts", provider: "elevenlabs" }, latencyMs);
-  if (ok) metrics.ttsCharacters.inc(characters);
-  const fields = { event: "tts_call", provider: "elevenlabs", characters, bytes: bytes ?? null, latency_ms: Math.round(latencyMs), ok };
+/**
+ * Record one speech synthesis. Counted by characters, not costed.
+ * `cached` hits never reached the provider, so they are excluded from the
+ * provider call/latency series (they have their own amatic_tts_cache_total).
+ */
+function recordTtsCall(log, { provider = "elevenlabs", cached = false, characters, bytes, latencyMs, ok, error }) {
+  if (!cached) {
+    metrics.llmCalls.inc({ route: "tts", provider, outcome: ok ? "ok" : "error" });
+    metrics.llmLatency.observe({ route: "tts", provider }, latencyMs);
+    if (ok) metrics.ttsCharacters.inc(characters);
+  }
+  const fields = { event: "tts_call", provider, cached, characters, bytes: bytes ?? null, latency_ms: Math.round(latencyMs), ok };
   if (ok) log.info(fields, "tts call complete");
   else log.warn({ ...fields, err: error?.message }, "tts call failed");
 }

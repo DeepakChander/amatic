@@ -97,34 +97,45 @@ for a tutor is probably the right call.
 
 ---
 
-## Migrating TTS to Kokoro (recommended)
+## Kokoro behind a flag (implemented — docs/18 Phase 3.4)
 
-Kokoro-82M runs faster than real time on this machine's CPU ([07](07-open-source-alternatives.md)).
-This removes an entire paid provider.
+Kokoro-82M runs in-process via `kokoro-js` (ONNX on CPU), faster than real time on this
+machine ([07](07-open-source-alternatives.md)). It removes an entire paid provider. Both
+providers live in `amatic-app/api/lib/tts.js`; the endpoint contract is unchanged — text
+in, audio bytes out — and the client plays whatever `Content-Type` comes back.
 
-**The endpoint contract does not change** — text in, audio bytes out — so no client edits
-are needed:
+| Variable | Default | Meaning |
+|---|---|---|
+| `TTS_PROVIDER` | `elevenlabs` | `elevenlabs` or `kokoro` |
+| `KOKORO_VOICE` | `af_heart` | Kokoro voice id (54 available; ElevenLabs ids are ignored on this provider) |
+| `KOKORO_DTYPE` | `q8` | `q8` (~90 MB, fast) or `fp32` (larger, best quality) |
+| `TTS_CACHE_DIR` | `amatic-app/.cache/tts` | synthesized audio cache (gitignored) |
+| `TTS_CACHE_MAX_MB` | `200` | cache size cap, least-recently-used files evicted first |
 
-1. Run Kokoro behind a small local HTTP service (Python, e.g. FastAPI)
-2. Add `TTS_PROVIDER=kokoro|elevenlabs` and `KOKORO_URL` to `.env.local`
-3. In `text-to-speech.js`, branch on `TTS_PROVIDER`; keep the ElevenLabs path intact
-4. Map voice selection — Kokoro's 54 voices don't share ElevenLabs' IDs, so
-   `DEFAULT_VOICE_ID` in the hook needs a provider-aware equivalent
-5. Verify audio format matches what `new Audio(blobUrl)` accepts (WAV or MP3)
+The model downloads from Hugging Face into the transformers.js cache on the **first
+request after a cold start** — measured at ~34 s including download on this machine; every
+later request for the same sentence is a cache hit (0 ms). `/readyz` reports the active
+provider, so a missing `ELEVENLABS_API_KEY` does not fail readiness when Kokoro is active.
 
 **Keep the flag.** Being able to A/B the two providers on narration quality is worth more
-than the few lines it costs, and a hard cutover throws away your fallback.
+than the few lines it costs, and a hard cutover throws away your fallback. Responses carry
+`X-TTS-Provider` and `X-TTS-Cache: hit|miss` so you can tell which path served a sentence.
+
+## Audio cache
+
+Every synthesized sentence is stored under `sha256(provider, voice, lang, text)`. Stock
+phrases — the recognition voice intro, "Incredible!" — used to be re-synthesised and
+re-billed on every turn; now they are paid for once. Hits and misses are counted in
+`amatic_tts_cache_total{result}`, and `tts_call` log events carry `cached: true|false`.
+Cache hits are excluded from the provider latency and call-count series.
 
 ## What's missing
 
-- **No caching of generated audio.** The same sentence — "Let's look at what you drew" —
-  is re-synthesised and re-billed every time. A hash → audio cache would cut spend
-  measurably for stock phrases.
-- **No retry.** One failed TTS call silently drops that sentence from the explanation.
-- **No timeout.** A hung request stalls the queue.
 - **No audio-level telemetry.** Nothing records how much narration was actually played
   versus interrupted — which is exactly the signal that tells you whether explanations are
-  too long.
+  too long. (`turn_complete` reports how many sentences were queued, not played.)
+- **Retry and timeout** are now handled — 20 s to headers plus 20 s for the body, two
+  retries on 429/5xx — see [04](04-api-reference.md).
 
 ## Next
 

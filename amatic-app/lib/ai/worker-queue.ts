@@ -30,7 +30,8 @@ export interface WorkerQueueOptions {
   onDrop?: (reason: WorkerDropReason) => void;
 }
 
-export type WorkerDropReason = "full" | "circuit" | "closed";
+/** `cap` is applied by the caller before enqueue (per-turn image budget). */
+export type WorkerDropReason = "full" | "circuit" | "closed" | "cap";
 
 export interface WorkerQueueStats {
   running: number;

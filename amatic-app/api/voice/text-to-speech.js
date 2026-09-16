@@ -1,14 +1,18 @@
 /**
  * Text-to-Speech Endpoint
- * Uses ElevenLabs for natural voice synthesis
+ *
+ * Provider (ElevenLabs or local Kokoro) and the hash-keyed audio cache live
+ * in api/lib/tts.js — see TTS_PROVIDER there. Cached sentences return in
+ * milliseconds and cost nothing.
  */
 
-const { elevenLabsFor, collectAudio } = require("../lib/providers");
+const { synthesize, resolveProvider, needsElevenLabsKey } = require("../lib/tts");
 const { recordTtsCall } = require("../lib/cost");
 
 module.exports = async (req, res) => {
   const started = Date.now();
   let characters = 0;
+  const provider = resolveProvider();
   try {
     // Validate HTTP method
     if (req.method !== "POST") {
@@ -29,38 +33,27 @@ module.exports = async (req, res) => {
     }
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    if (!apiKey) {
+    if (needsElevenLabsKey(provider) && !apiKey) {
       return res
         .status(500)
         .json({ error: "ElevenLabs API key not configured" });
     }
 
-    // 20 s to headers + 20 s for the body, 2 retries on 429/5xx (Phase 1.3).
-    const { client, requestOptions, timeoutMs } = elevenLabsFor("tts", apiKey);
-    const selectedVoice = voiceId || "EXAVITQu4vr4xnSDxMaL"; // Bella
-
-    const streamResponse = await client.textToSpeech.convertAsStream(
-      selectedVoice,
-      {
-        model_id: "eleven_multilingual_v2",
-        text,
-        voice_settings: {
-          stability: 0.45,       // slightly looser = more natural variation
-          similarity_boost: 0.75,
-          style: 0.35,           // raised from 0.0 — adds expression and emotion to narration
-          use_speaker_boost: true,
-        },
-      },
-      requestOptions,
-    );
-
-    // Collect audio chunks. The SDK timeout above stops at the headers, so
-    // a provider that stalls mid-body needs its own deadline or the client's
-    // voice queue hangs on this sentence forever.
-    const audioStream = streamResponse.data ?? streamResponse;
-    const buffer = await collectAudio(audioStream, timeoutMs, "TTS body");
+    // The client's voice id goes through unfiltered — providers that do not
+    // take one (Kokoro) ignore it. `variant` keeps this endpoint's voice
+    // settings from colliding in the cache with /api/voice/whisper-tts.
+    const { buffer, mimeType, cached } = await synthesize({
+      text,
+      voice: voiceId,
+      lang,
+      variant: "narration",
+      apiKey,
+      provider,
+    });
 
     recordTtsCall(req.log, {
+      provider,
+      cached,
       characters,
       bytes: buffer.length,
       latencyMs: Date.now() - started,
@@ -68,11 +61,15 @@ module.exports = async (req, res) => {
     });
 
     // Return audio
-    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Length", buffer.length);
+    res.setHeader("X-TTS-Provider", provider);
+    res.setHeader("X-TTS-Cache", cached ? "hit" : "miss");
     res.send(buffer);
   } catch (error) {
     recordTtsCall(req.log, {
+      provider,
+      cached: false,
       characters,
       latencyMs: Date.now() - started,
       ok: false,

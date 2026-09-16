@@ -14,6 +14,7 @@
  */
 
 const { anthropicFor, geminiFor, elevenLabsFor, budgetFor, withDeadline } = require("./providers");
+const { probeTts, resolveProvider: resolveTtsProvider } = require("./tts");
 
 const READY_CACHE_MS = 30_000;
 let cached = null; // { at, result }
@@ -37,6 +38,11 @@ async function probeGemini() {
 }
 
 async function probeElevenLabs() {
+  // When speech comes from local Kokoro, ElevenLabs is not a dependency and
+  // its (possibly absent) key must not fail readiness.
+  if (resolveTtsProvider() !== "elevenlabs") {
+    return (await probeTts()) || { configured: false, ok: false, reason: "not the active TTS provider" };
+  }
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key) return { configured: false, ok: false, reason: "no key" };
   const { client, requestOptions } = elevenLabsFor("probe", key);

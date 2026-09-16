@@ -169,9 +169,25 @@ The teaching brain. **Responds with SSE, always HTTP 200** — including on erro
   "memoryContext": "string",
   "canvasImage": "<base64 JPEG>",
   "teachingBrief": { "topic": "", "confidence": "", "visualsAlreadyDispatched": false,
-                     "canvasLabels": [], "voiceIntro": "" }
+                     "canvasLabels": [], "voiceIntro": "", "recognitionId": "…" }
 }
 ```
+
+**Output mode** — `MASTER_OUTPUT_MODE=json|tools` (default `json`). In `json` mode the
+model writes JSON objects as text and the ADR-003 scanner extracts them; in `tools` mode
+the model calls strict tools (`speak`, `write_text`, `draw_image`, `suggest_next`) and the
+API validates the arguments, so malformed output becomes a counted `parser_reject` instead
+of silent loss. A `tools` turn may take up to 6 model rounds (call → acknowledge →
+continue), summed into one `llm_call`. Both modes emit the events below; compare them in
+`amatic_master_events_total{mode,type}` before changing the default. See
+[03](03-ai-teaching-loop.md) Stage 5.
+
+**Prompt caching** — the system prompt (`api/lib/master-prompt.js`) is static per mode and
+carries `cache_control: ephemeral`; in `tools` mode the tool list precedes it in the cached
+prefix. Everything request-specific is in the user message after the breakpoint. Verify on
+the `llm_call` event: `cache_read_input_tokens` should be non-zero from the second turn
+on. It is 0 on every turn if something in the prefix varies, or if the prefix is under
+Sonnet 5's 1024-token minimum — the `json` prompt sits just above it, `tools` comfortably.
 
 **Response** — `text/event-stream`, one JSON object per `data:` line:
 
@@ -213,18 +229,32 @@ Image generation. `:id` is accepted and echoed but does not route anything.
 
 **Request**
 ```json
-{ "prompt": "string, max 5000 chars", "style": "3d" | "schematic" | any, "workerId": 1 }
+{ "prompt": "string, max 5000 chars", "style": "3d" | "schematic" | any, "workerId": 1,
+  "topic": "Human Heart Anatomy", "title": "Blood Flow" }
 ```
+
+`topic` (the recognised topic) and optional `title` (the brief's image title) are hints
+for the **vetted diagram library** (`amatic-app/diagram-library/`, docs/18 Phase 3.3): an
+exact slug match returns a teacher-approved image with no provider call; a miss falls
+through to generation. A request carrying a `title` matches only `topic--title` and never
+falls back to the bare topic, so several images in one turn cannot collapse onto the same
+picture. Library hits are counted as `amatic_images_generated_total{outcome="library"}`
+and deliberately touch no Gemini call or latency series. See the library README.
 
 **Response 200**
 ```json
-{ "workerId": 1, "status": "success", "imageUrl": "data:image/png;base64,…",
-  "imageData": "<base64>", "imageMimeType": "image/png",
-  "textDescription": "…", "generationTime": 4213 }
+{ "workerId": 1, "status": "success", "source": "generated" | "library",
+  "imageUrl": "data:image/png;base64,…", "imageData": "<base64>", "imageMimeType": "image/png",
+  "description": "…", "generationTime": 4213 }
 ```
 
 **Errors:** 400 prompt too long · 500 `"Gemini API key not configured"` ·
 500 `"Gemini did not return image data"`
+
+**Client-side cap:** the hook requests at most `VITE_MAX_IMAGES_PER_TURN` images per turn
+(default **1** — image generation is the dominant cost line and generated diagrams are
+often subtly wrong). Requests beyond the cap are counted as
+`amatic_worker_dropped_total{reason="cap"}`. Raise it as the library fills.
 
 **Model:** `gemini-2.5-flash-image`, `responseModalities: ["TEXT","IMAGE"]`. The prompt is
 wrapped in a hard-coded "hyper-realistic educational image" template — a fixed style
@@ -246,15 +276,24 @@ from the UI.
 
 **Request** `{ "text": "max 5000 chars", "voiceId": "…", "lang": "en-US" }`
 
-**Response 200** — raw audio bytes. The client wraps them in a Blob URL.
+**Response 200** — raw audio bytes (`audio/mpeg` from ElevenLabs, `audio/wav` from
+Kokoro). The client wraps them in a Blob URL. Response headers `X-TTS-Provider` and
+`X-TTS-Cache: hit|miss` say which path served the sentence.
 
-**Model:** ElevenLabs `eleven_multilingual_v2`, default voice `EXAVITQu4vr4xnSDxMaL`
-("Bella"), `stability: 0.45`, `similarity_boost: 0.75`, `style: 0.35`,
-`use_speaker_boost: true`.
+**Provider** — `TTS_PROVIDER=elevenlabs|kokoro` (`api/lib/tts.js`, [08](08-voice-pipeline.md)).
+ElevenLabs: `eleven_multilingual_v2`, default voice `EXAVITQu4vr4xnSDxMaL` ("Bella"),
+`stability: 0.45`, `similarity_boost: 0.75`, `style: 0.35`, `use_speaker_boost: true`.
+Kokoro: local `Kokoro-82M` ONNX, voice `KOKORO_VOICE` (default `af_heart`); `voiceId` is
+ignored. With Kokoro active, `ELEVENLABS_API_KEY` is not required.
+
+**Cache** — every sentence is cached by `sha256(provider, voice, lang, text)` under
+`TTS_CACHE_DIR` (default `amatic-app/.cache/tts`, cap `TTS_CACHE_MAX_MB`, default 200).
+Hits return in milliseconds and cost nothing; counted in `amatic_tts_cache_total{result}`.
 
 ### `POST /api/voice/whisper-tts`
 
-Alternate TTS path. Also ElevenLabs. Not called by the Jarvis loop.
+Alternate TTS path on the same provider/cache layer (named voices `nova|bella` map to
+Bella on ElevenLabs). Not called by the Jarvis loop.
 
 ### `POST /api/voice/speech-to-text`
 

@@ -6,6 +6,9 @@
 
 const { geminiFor } = require("../lib/providers");
 const { recordImageCall } = require("../lib/cost");
+const { createDiagramLibrary } = require("../lib/diagram-library");
+
+const library = createDiagramLibrary();
 
 module.exports = async (req, res) => {
   // Declared outside the try so the catch can report real latency and tell
@@ -25,6 +28,8 @@ module.exports = async (req, res) => {
       typeof body.prompt === "string" ? body.prompt.trim() : "";
     const style = body.style === "3d" ? "3d" : "2d";
     const requestId = body.workerId;
+    const topic = typeof body.topic === "string" ? body.topic.slice(0, 200) : "";
+    const title = typeof body.title === "string" ? body.title.slice(0, 200) : "";
 
     if (!prompt) {
       return res.status(400).json({ error: "Valid prompt required" });
@@ -33,6 +38,40 @@ module.exports = async (req, res) => {
       return res
         .status(400)
         .json({ error: "Prompt too long (max 5,000 characters)" });
+    }
+
+    /** The one success payload shape, used by both the library and generated paths. */
+    const imageResponse = ({ source, imageBase64, imageMimeType, description }) => ({
+      workerId,
+      taskId: requestId,
+      status: "success",
+      source,
+      generationTime: Date.now() - startTime,
+      imageData: imageBase64,
+      imageMimeType,
+      imageUrl: `data:${imageMimeType};base64,${imageBase64}`,
+      description,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Phase 3.3 — a human-vetted diagram for this topic beats a generated
+    // one on both cost and correctness. Exact slug match only; a miss falls
+    // through to live generation.
+    if (topic) {
+      const hit = library.lookup(topic, title);
+      if (hit) {
+        const imageBase64 = library.readBase64(hit);
+        recordImageCall(req.log, { latencyMs: Date.now() - startTime, outcome: "library" });
+        req.log.info({ event: "diagram_library_hit", slug: hit.slug, file: hit.file }, "served vetted diagram");
+        return res.json(
+          imageResponse({
+            source: "library",
+            imageBase64,
+            imageMimeType: hit.mimeType,
+            description: hit.title,
+          }),
+        );
+      }
     }
 
     const apiKey =
@@ -99,17 +138,14 @@ No text overlays or watermarks.`;
 
     recordImageCall(req.log, { latencyMs: generationTime, outcome: "ok" });
 
-    res.json({
-      workerId,
-      taskId: requestId,
-      status: "success",
-      generationTime,
-      imageData: imageBase64,
-      imageMimeType,
-      imageUrl: `data:${imageMimeType};base64,${imageBase64}`,
-      description: textDescription,
-      timestamp: new Date().toISOString(),
-    });
+    res.json(
+      imageResponse({
+        source: "generated",
+        imageBase64,
+        imageMimeType,
+        description: textDescription,
+      }),
+    );
   } catch (error) {
     const clientGone = !!disconnect?.signal.aborted;
     recordImageCall(req.log, {

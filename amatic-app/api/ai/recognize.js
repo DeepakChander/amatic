@@ -108,7 +108,14 @@ module.exports = async (req, res) => {
         // Fast background classification on the drawing hot path — low effort
         // keeps latency near the old thinking-off behaviour.
         output_config: { effort: "low" },
-        system: SYSTEM_PROMPT,
+        // Phase 3.1 — cache the static prompt. NOTE: this prompt is well under
+        // the model's 1024-token minimum cacheable prefix, so today it silently
+        // does not cache (cache_creation_input_tokens stays 0 on the llm_call
+        // event). The marker is here so it takes effect the moment the prompt
+        // grows past the threshold; the image after it is volatile anyway.
+        system: [
+          { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+        ],
         messages: [
           {
             role: "user",

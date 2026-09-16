@@ -111,9 +111,22 @@ failure and blocks every later dispatch in the turn. See [17](17-roadmap.md) P1.
 | `canvasImage` | 512px JPEG of the whole scene, `ai-` elements excluded |
 | `teachingBrief` | topic/confidence/labels/intro, plus `visualsAlreadyDispatched` |
 
-The response is SSE. The client filters to `content_block_delta` with
-`delta.type === "text_delta"`, so thinking deltas are ignored — which is why adaptive
-thinking on Sonnet 5 did not break the parser, only added latency before first text.
+The response is SSE of normalized events. How the server gets them out of the model is
+selected by `MASTER_OUTPUT_MODE` (`amatic-app/api/lib/master-events.js`):
+
+- **`json`** (default) — the model writes one JSON object per line as text and the
+  string-aware scanner of [16](16-decisions.md) ADR-003 cuts objects out of the text deltas.
+- **`tools`** — the model calls typed tools (`speak`, `write_text`, `draw_image`,
+  `suggest_next`, all `strict`). The API validates the arguments, so a malformed event is a
+  typed `parser_reject` instead of lost content. One turn may take several model rounds
+  (call tools → acknowledged → continue), capped at 6.
+
+Both modes emit the same five event types below and count into
+`amatic_master_events_total{mode,type}`. Switch the default only after a real session
+shows equal event counts on both paths. Thinking deltas are ignored in both modes, which
+is why adaptive thinking on Sonnet 5 did not break parsing, only added latency before
+the first event. The system prompt is static per mode and carries a prompt-cache
+breakpoint; watch `cache_read_input_tokens` on the `llm_call` event.
 
 ### Event types
 
