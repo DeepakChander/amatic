@@ -277,6 +277,9 @@ const PROACTIVE_COOLDOWN_MS = 15000;
 /** Minimum Web Speech API confidence score to act on a voice transcript.
  *  0 = browser doesn't report confidence (pass through); <0.65 = likely garbled. */
 const MIN_VOICE_CONFIDENCE = 0.65;
+/** How long a turn is protected from being interrupted by a stray transcript.
+ *  Saying "stop" or "wait" bypasses this and always interrupts. */
+const MIN_INTERRUPT_MS = 8000;
 const IMAGE_WIDTH = 400;
 const IMAGE_HEIGHT = 300;
 const PLACEMENT_PAD = 20;
@@ -357,6 +360,8 @@ export function useCanvasJarvis(
   const isPlayingVoiceRef = useRef(false);
   /** Bounded image-worker queue for the current turn (docs/18 Phase 1.4). */
   const workerQueueRef = useRef<WorkerQueue | null>(null);
+  /** When the in-flight turn began, for the interrupt grace period. */
+  const turnStartedAtRef = useRef<number>(0);
   const transcriptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Cached teaching brief from background recognition */
   const recognitionCacheRef = useRef<TeachingBrief | null>(null);
@@ -413,6 +418,7 @@ export function useCanvasJarvis(
       };
       // Per-turn counts for the turn_complete report (docs/18 Phase 2.3).
       const turnStarted = Date.now();
+      turnStartedAtRef.current = turnStarted;
       const counts = { voiceSentences: 0, canvasTexts: 0, imagesRequested: 0 };
       let usedFastPath = false;
       let turnRecognitionId: string | undefined;
@@ -919,6 +925,23 @@ export function useCanvasJarvis(
           setJarvisPhase("watching");
           return;
         }
+        // Echo suppression. The mic is on by default and hears the tutor's
+        // own narration through the speakers; every transcript used to abort
+        // the turn in flight and start a new one, so on a slow provider no
+        // turn ever survived long enough to render. Measured: two turns
+        // killed at 5.9 s and 20.5 s while the server happily produced voice
+        // and canvas text for both.
+        if (isPlayingVoiceRef.current) {
+          return;
+        }
+        // A turn that only just started is almost certainly being interrupted
+        // by room noise rather than a deliberate question. "stop"/"wait"
+        // above always work, so the student can still cut in immediately.
+        const running = teachingAbortRef.current !== null;
+        if (running && Date.now() - turnStartedAtRef.current < MIN_INTERRUPT_MS) {
+          return;
+        }
+
         setCurrentTranscript(t.text);
         setJarvisPhase("listening");
 
