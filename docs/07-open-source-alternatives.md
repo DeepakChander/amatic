@@ -149,6 +149,33 @@ Images              ->  pre-generated cached library, or dropped
 Ceiling: **~20 five-minute sessions per day.** Enough to develop against, demo, and run a
 small pilot. Not enough for a classroom.
 
+### Status — implemented 2026-09-16
+
+All four are now switchable, and the default configuration costs nothing:
+
+| Capability | Flag | Default | Notes |
+|---|---|---|---|
+| Vision + reasoning | `LLM_PROVIDER` | `ollama` | `ollama` (local) · `gemini` (free tier) · `anthropic` (paid) |
+| TTS | `TTS_PROVIDER` | `kokoro` | local CPU, no key |
+| STT | — | Web Speech | unchanged, already free |
+| Images | `GOOGLE_AI_API_KEY` | library-only when unset | vetted diagrams; clean skip on a miss |
+
+`api/lib/llm.js` holds the three teaching-brain backends behind one interface
+(a stream of text/tool/usage items), so routes do not branch per provider.
+`docker-compose.ollama.yml` runs the local option; `/readyz` reports which
+provider serves each capability and how to start one that is down.
+
+**A third option the table above did not consider: fully local via Ollama.**
+docs/07 originally ruled local vision out on this hardware, and that reasoning
+still stands — see the measurement note below. It is implemented anyway so the
+tradeoff can be judged on a real number rather than an estimate. Small 3B
+models (`qwen2.5vl:3b` for vision, `qwen2.5:3b` for text) are the ceiling here.
+
+Structured output is the one place the local path needed help: `recognize`
+now sends a JSON **schema** as an output constraint rather than only asking
+for JSON in the prompt, which is the difference between a small model
+usually complying and reliably complying.
+
 ## What I would actually do first
 
 Before migrating anything: **add prompt caching and measure real costs**
