@@ -20,8 +20,10 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      # Models live on D: with the project, not on the C: system drive.
-      - ollama-models:/root/.ollama
+      # Bind mount, not a named volume: a named volume lives in Docker's WSL2
+      # storage on C:, and C: is the drive that was running out of space. This
+      # keeps the multi-GB model weights next to the project on D:.
+      - ./.ollama-models:/root/.ollama
     environment:
       # Keep one model resident so the next turn does not pay reload cost,
       # and cap parallelism — CPU inference does not benefit from more.
@@ -35,6 +37,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-
-volumes:
-  ollama-models:
