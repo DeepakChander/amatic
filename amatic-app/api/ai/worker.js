@@ -57,12 +57,18 @@ module.exports = async (req, res) => {
     // Phase 3.3 — a human-vetted diagram for this topic beats a generated
     // one on both cost and correctness. Exact slug match only; a miss falls
     // through to live generation.
-    if (topic) {
-      const hit = library.lookup(topic, title);
+    {
+      // The prompt is passed too: without drawing recognition there is no
+      // topic, and the image request the teaching model wrote is the only
+      // description of what is wanted.
+      const hit = library.lookup(topic, title, prompt);
       if (hit) {
         const imageBase64 = library.readBase64(hit);
         recordImageCall(req.log, { latencyMs: Date.now() - startTime, outcome: "library" });
-        req.log.info({ event: "diagram_library_hit", slug: hit.slug, file: hit.file }, "served vetted diagram");
+        req.log.info(
+          { event: "diagram_library_hit", slug: hit.slug, file: hit.file, matched_by: hit.matchedBy },
+          "served vetted diagram",
+        );
         return res.json(
           imageResponse({
             source: "library",

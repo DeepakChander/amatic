@@ -1,1 +1,177 @@
-{}
+{
+  "water-cycle": [
+    {
+      "file": "water-cycle.png",
+      "title": "The Water Cycle",
+      "mimeType": "image/png",
+      "keywords": [
+        "water cycle",
+        "evaporation",
+        "condensation",
+        "precipitation",
+        "rain cycle",
+        "hydrological"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "human-heart": [
+    {
+      "file": "human-heart.png",
+      "title": "Human Heart",
+      "mimeType": "image/png",
+      "keywords": [
+        "heart",
+        "cardiac",
+        "ventricle",
+        "atrium",
+        "blood pump",
+        "circulatory"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "plant-cell": [
+    {
+      "file": "plant-cell.png",
+      "title": "Plant Cell",
+      "mimeType": "image/png",
+      "keywords": [
+        "plant cell",
+        "chloroplast",
+        "cell wall",
+        "vacuole",
+        "cytoplasm",
+        "cell"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "solar-system": [
+    {
+      "file": "solar-system.png",
+      "title": "The Solar System",
+      "mimeType": "image/png",
+      "keywords": [
+        "solar system",
+        "planet",
+        "planets",
+        "orbit",
+        "sun",
+        "earth",
+        "mars",
+        "jupiter"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "photosynthesis": [
+    {
+      "file": "photosynthesis.png",
+      "title": "Photosynthesis",
+      "mimeType": "image/png",
+      "keywords": [
+        "photosynthesis",
+        "chlorophyll",
+        "glucose",
+        "carbon dioxide",
+        "sunlight",
+        "leaf"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "food-chain": [
+    {
+      "file": "food-chain.png",
+      "title": "A Food Chain",
+      "mimeType": "image/png",
+      "keywords": [
+        "food chain",
+        "food web",
+        "predator",
+        "prey",
+        "producer",
+        "consumer",
+        "energy flow"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "states-of-matter": [
+    {
+      "file": "states-of-matter.png",
+      "title": "States of Matter",
+      "mimeType": "image/png",
+      "keywords": [
+        "states of matter",
+        "solid",
+        "liquid",
+        "gas",
+        "melting",
+        "boiling",
+        "particle"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "volcano": [
+    {
+      "file": "volcano.png",
+      "title": "Volcano Cross-Section",
+      "mimeType": "image/png",
+      "keywords": [
+        "volcano",
+        "magma",
+        "lava",
+        "eruption",
+        "crater",
+        "vent"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "triangle-types": [
+    {
+      "file": "triangle-types.png",
+      "title": "Types of Triangle",
+      "mimeType": "image/png",
+      "keywords": [
+        "triangle",
+        "equilateral",
+        "isosceles",
+        "scalene",
+        "right angle",
+        "geometry"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ],
+  "butterfly-life-cycle": [
+    {
+      "file": "butterfly-life-cycle.png",
+      "title": "Life Cycle of a Butterfly",
+      "mimeType": "image/png",
+      "keywords": [
+        "butterfly",
+        "life cycle",
+        "caterpillar",
+        "chrysalis",
+        "pupa",
+        "metamorphosis",
+        "larva"
+      ],
+      "approvedBy": "hand-authored starter set",
+      "approvedAt": "2026-09-16"
+    }
+  ]
+}

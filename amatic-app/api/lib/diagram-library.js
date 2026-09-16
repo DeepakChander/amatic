@@ -77,21 +77,8 @@ function createDiagramLibrary({
     return index;
   }
 
-  /**
-   * Find a vetted image for a topic. With a `title`, only an exact
-   * `topic--title` entry matches (see the module header).
-   * @returns {{ file, absPath, mimeType, title, slug } | null}
-   */
-  function lookup(topic, title) {
-    const idx = load();
-    const topicSlug = slugify(topic);
-    if (!topicSlug) return null;
-    const titleSlug = slugify(title);
-    const slug = titleSlug ? `${topicSlug}--${titleSlug}` : topicSlug;
-
-    const entries = idx[slug];
-    if (!Array.isArray(entries) || entries.length === 0) return null;
-    const entry = entries[0];
+  /** Turn an index entry into a hit, or null if it does not resolve to a file. */
+  function resolve(slug, entry, fallbackTitle, matchedBy) {
     if (!entry || typeof entry.file !== "string") return null;
     // Never let an index entry escape the library directory.
     const absPath = path.resolve(dir, entry.file);
@@ -99,11 +86,60 @@ function createDiagramLibrary({
     if (!fs.existsSync(absPath)) return null;
     return {
       slug,
+      matchedBy,
       file: entry.file,
       absPath,
       mimeType: typeof entry.mimeType === "string" ? entry.mimeType : "image/png",
-      title: typeof entry.title === "string" ? entry.title : title || topic,
+      title: typeof entry.title === "string" ? entry.title : fallbackTitle,
     };
+  }
+
+  /**
+   * Find a vetted image.
+   *
+   * Two ways to match, in order:
+   *
+   *  1. **Exact slug.** `topic`, or `topic--title` when a title is given. With
+   *     a title it does NOT fall back to the bare topic (module header).
+   *  2. **Declared keywords.** Each entry lists the phrases it answers to, and
+   *     a request whose text contains one matches. This is what makes the
+   *     library usable when drawing recognition is unavailable — on the local
+   *     provider there is no topic at all, only the image request the teaching
+   *     model wrote. Keywords are authored alongside the diagram by whoever
+   *     approved it, so this stays a human decision rather than fuzzy search.
+   *
+   * @returns {{ file, absPath, mimeType, title, slug, matchedBy } | null}
+   */
+  function lookup(topic, title, text) {
+    const idx = load();
+    const topicSlug = slugify(topic);
+
+    if (topicSlug) {
+      const titleSlug = slugify(title);
+      const slug = titleSlug ? `${topicSlug}--${titleSlug}` : topicSlug;
+      const entries = idx[slug];
+      if (Array.isArray(entries) && entries.length) {
+        const hit = resolve(slug, entries[0], title || topic, "slug");
+        if (hit) return hit;
+      }
+    }
+
+    // Keyword pass over everything the caller said about the image.
+    const haystack = `${topic || ""} ${title || ""} ${text || ""}`.toLowerCase();
+    if (!haystack.trim()) return null;
+    let best = null;
+    for (const [slug, entries] of Object.entries(idx)) {
+      const entry = Array.isArray(entries) ? entries[0] : null;
+      const keywords = Array.isArray(entry?.keywords) ? entry.keywords : [];
+      for (const kw of keywords) {
+        const k = String(kw).toLowerCase().trim();
+        // Longest keyword wins, so "water cycle" beats a bare "water".
+        if (k && haystack.includes(k) && (!best || k.length > best.length)) {
+          best = { slug, entry, length: k.length, keyword: k };
+        }
+      }
+    }
+    return best ? resolve(best.slug, best.entry, best.entry.title || topic, `keyword:${best.keyword}`) : null;
   }
 
   /** Read a hit as base64 for the worker response shape. */
