@@ -8,14 +8,14 @@
  * 3. Handles Interrupts
  */
 
-const { TEACHING_MODEL } = require("./models");
-const { anthropicFor, budgetFor } = require("../lib/providers");
+const { budgetFor } = require("../lib/providers");
 const { recordLlmCall } = require("../lib/cost");
 const metrics = require("../lib/metrics");
+const llm = require("../lib/llm");
 const {
     resolveMode,
     TOOLS,
-    createToolEventParser,
+    TOOL_EVENTS,
     createJsonEventParser,
 } = require("../lib/master-events");
 const { systemPromptFor } = require("../lib/master-prompt");
@@ -58,6 +58,8 @@ module.exports = async (req, res) => {
     res.setHeader("Connection", "keep-alive");
 
     const log = req.log;
+    const provider = llm.resolveLlmProvider();
+    const model = llm.modelFor("master", provider);
     // Set by the res 'close' handler and the idle watchdog below. Both are
     // declared at function scope so the outer catch can tell an interrupt
     // from a real provider error.
@@ -73,7 +75,8 @@ module.exports = async (req, res) => {
         callRecorded = true;
         recordLlmCall(log, {
             route: "master",
-            model: TEACHING_MODEL,
+            provider,
+            model,
             usage: Object.keys(usage).length ? usage : null,
             latencyMs: Date.now() - callStarted,
             outcome,
@@ -118,14 +121,14 @@ module.exports = async (req, res) => {
             return res.end();
         }
 
-        const apiKey = process.env.ANTHROPIC_API_KEY;
+        // Provider is chosen by LLM_PROVIDER (ollama | gemini | anthropic).
+        // `provider` and `model` were resolved above so the llm_call event is
+        // attributed correctly even when the turn fails before the first byte.
+        const { key: apiKey, name: keyName } = llm.apiKeyFor(provider);
         if (!apiKey) {
-            res.write(`data: ${JSON.stringify({ type: "error", message: "API Key missing" })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: "error", message: `${keyName} missing` })}\n\n`);
             return res.end();
         }
-
-        // 30 s to first byte, 1 retry on the initial request only (Phase 1.3).
-        const client = anthropicFor("master", apiKey);
 
         // Client disconnect. NOTE: this must be `res`, not `req` — on Node ≥16
         // the request emits 'close' as soon as its body has been consumed
@@ -239,37 +242,6 @@ module.exports = async (req, res) => {
         }
         userContent.push({ type: "text", text: userPrompt });
 
-        // 3. Stream the turn.
-        // TEACHING_MODEL has a 1M-token input context window as standard, so no
-        // beta header is needed for the canvas state + memory to fit.
-        // max_tokens caps OUTPUT only; the model's ceiling is 128K.
-        const request = {
-            model: TEACHING_MODEL,
-            max_tokens: 64000, // room for thinking + a full teaching turn; ceiling is 128K
-            // Sonnet 5 rejects non-default temperature/top_p/top_k with a 400,
-            // so the previous temperature: 0.7 is gone — steer tone via the prompt.
-            thinking: { type: "adaptive" },
-            // Sonnet 5 at "medium" is comparable to Sonnet 4.6 at "high", so this
-            // holds prior teaching quality while limiting the thinking latency a
-            // student now waits through. Raise to "high"/"xhigh" for richer turns.
-            output_config: { effort: "medium" },
-            // Phase 3.1 — prompt caching. Render order is tools → system →
-            // messages and caching is a prefix match, so the frozen system
-            // prompt (and, in tools mode, the fixed tool list before it) is the
-            // cached prefix; everything volatile — canvas state, image, memory,
-            // brief — sits in the user message after the breakpoint. Verify with
-            // usage.cache_read_input_tokens on the llm_call event: if it stays
-            // 0 across turns, either something in the prefix varies or the
-            // prefix is under this model's 1024-token minimum.
-            system: [
-                { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
-            ],
-            messages: [{ role: "user", content: userContent }],
-        };
-        if (mode === "tools") {
-            request.tools = TOOLS;
-        }
-
         // Mid-stream watchdog: a provider that stops sending deltas must not
         // hold the turn open forever. Never retried — once bytes are on the
         // wire the turn is non-idempotent; the student's next draw starts a
@@ -290,6 +262,8 @@ module.exports = async (req, res) => {
         // same normalized shapes (api/lib/master-events.js).
         const eventsByType = {};
         let proseChars = 0;
+        let toolCalls = 0;
+        let rounds = 0;
         const emit = (event) => {
             eventsByType[event.type] = (eventsByType[event.type] || 0) + 1;
             metrics.masterEvents.inc({ mode, type: event.type });
@@ -302,90 +276,71 @@ module.exports = async (req, res) => {
             metrics.parserRejects.inc();
             log.warn({ event: "parser_reject", mode, ...info }, "discarded invalid model output");
         };
-        const parser = mode === "tools"
-            ? createToolEventParser({ onEvent: emit, onReject: reject, onText: (n) => { proseChars += n; } })
-            : createJsonEventParser({ onEvent: emit, onReject: reject });
+        // json mode: the model writes JSON objects as prose and the ADR-003
+        // scanner cuts them out. tools mode: the provider hands over complete,
+        // schema-validated calls, so prose is counted and discarded.
+        const jsonParser = mode === "tools" ? null : createJsonEventParser({ onEvent: emit, onReject: reject });
 
-        // In tools mode one model turn may span several rounds: the model
-        // calls tools, we acknowledge them, it continues. Every round's usage
-        // is billed, so rounds are summed into `usage`.
-        const MAX_TOOL_ROUNDS = 6;
-        let rounds = 0;
-        let stopReason = null;
-        const addUsage = (u) => {
-            for (const [k, v] of Object.entries(u || {})) {
-                if (typeof v === "number") usage[k] = (usage[k] || 0) + v;
-            }
-        };
-
+        // 5. Stream. api/lib/llm.js owns the provider mechanics (and the
+        // tool round-trip) and yields the same normalized items either way.
         armIdleTimer();
         try {
-            for (;;) {
-                rounds++;
-                metrics.masterRounds.inc({ mode });
-                const stream = client.messages.stream(request, { signal: upstream.signal });
-                // Usage as seen on the wire for this round, in case the round is
-                // cut short and finalMessage() never resolves.
-                const roundUsage = {};
-                let final = null;
-                try {
-                    for await (const chunk of stream) {
-                        if (aborted) break;
-                        armIdleTimer();
-                        if (chunk.type === "message_start" && chunk.message?.usage) {
-                            mergeUsage(roundUsage, chunk.message.usage);
-                        } else if (chunk.type === "message_delta") {
-                            if (chunk.usage) mergeUsage(roundUsage, chunk.usage);
-                            if (chunk.delta?.stop_reason) stopReason = chunk.delta.stop_reason;
-                        } else {
-                            parser.feed(chunk);
-                        }
+            for await (const item of llm.stream({
+                provider,
+                route: "master",
+                apiKey,
+                system: systemPrompt,
+                userContent,
+                tools: mode === "tools" ? TOOLS : undefined,
+                signal: upstream.signal,
+                // Output cap only. Kept well under the Gemini free tier's
+                // per-minute token budget while leaving room for a full turn.
+                maxTokens: provider === "gemini" ? 8192 : 64000,
+                // "medium" holds teaching quality while limiting the thinking
+                // latency a student waits through.
+                effort: "medium",
+                onRound: (n) => {
+                    rounds = n;
+                    metrics.masterRounds.inc({ mode });
+                },
+            })) {
+                if (aborted || stalled) break;
+                armIdleTimer();
+                if (item.kind === "text") {
+                    if (jsonParser) jsonParser.feed(item.text);
+                    else proseChars += item.text.length;
+                } else if (item.kind === "tool") {
+                    toolCalls++;
+                    if (item.error || !item.input) {
+                        reject({ tool: item.name, reason: "invalid_json", err: item.error });
+                        continue;
                     }
-                    // Inside the guarded block on purpose: an abort landing
-                    // between the last chunk and here rejects finalMessage(),
-                    // and that is an interrupt, not a provider failure.
-                    if (!aborted && !stalled) final = await stream.finalMessage();
-                } catch (err) {
-                    // The SDK throws on our own abort; that is not a failure.
-                    if (!(aborted || stalled)) throw err;
+                    const handler = TOOL_EVENTS[item.name];
+                    const event = handler ? handler(item.input) : null;
+                    if (event) emit(event);
+                    else reject({ tool: item.name, reason: handler ? "invalid_input" : "unknown_tool" });
+                } else if (item.kind === "usage") {
+                    mergeUsage(usage, item.usage);
                 }
-                if (aborted || stalled) {
-                    // The round was cut short, but its tokens were still
-                    // billed — count what came over the wire.
-                    addUsage(roundUsage);
-                    break;
-                }
-                addUsage(final.usage);
-                stopReason = final.stop_reason;
-                if (mode !== "tools" || stopReason !== "tool_use") break;
-                if (rounds >= MAX_TOOL_ROUNDS) {
-                    log.warn({ event: "tool_rounds_exhausted", rounds }, "model kept calling tools; ending turn");
-                    break;
-                }
-                // Acknowledge every call in ONE user message (splitting them
-                // teaches the model to stop calling tools in parallel) and let
-                // the model continue. Thinking blocks go back unchanged.
-                const toolUses = final.content.filter((b) => b.type === "tool_use");
-                request.messages.push({ role: "assistant", content: final.content });
-                request.messages.push({
-                    role: "user",
-                    content: toolUses.map((t) => ({ type: "tool_result", tool_use_id: t.id, content: "ok" })),
-                });
             }
+        } catch (err) {
+            // Providers throw on our own abort; that is not a failure.
+            if (!(aborted || stalled)) throw err;
         } finally {
             if (idleTimer) clearTimeout(idleTimer);
         }
-        if (parser.flush) parser.flush();
+        if (jsonParser) jsonParser.flush();
 
         log.info(
             {
                 event: "master_stream_complete",
+                provider,
+                model,
                 mode,
                 rounds,
-                stop_reason: stopReason,
                 events: eventsByType,
                 prose_chars: proseChars,
-                tool_calls: parser.toolCalls ?? null,
+                tool_calls: toolCalls,
             },
             "master stream complete",
         );

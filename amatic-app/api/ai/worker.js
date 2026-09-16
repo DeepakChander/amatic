@@ -77,7 +77,16 @@ module.exports = async (req, res) => {
     const apiKey =
       process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: "Gemini API key not configured" });
+      // Library-only mode (docs/07 option 3): no paid image provider. The
+      // library already missed above, so there is simply no image for this
+      // topic. 204 rather than 500 — the turn continues with voice and
+      // canvas labels, which docs/07 argues may be the better product anyway.
+      recordImageCall(req.log, { latencyMs: Date.now() - startTime, outcome: "unavailable" });
+      req.log.info(
+        { event: "image_unavailable", topic: topic || null },
+        "library miss and no image provider configured; skipping image",
+      );
+      return res.status(204).end();
     }
 
     // 60 s timeout, 2 retries on 429/5xx (Phase 1.3). A client that gives up

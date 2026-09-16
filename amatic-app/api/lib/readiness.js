@@ -13,28 +13,31 @@
  * request 401'd. It is kept for compatibility but now delegates to this.
  */
 
-const { anthropicFor, geminiFor, elevenLabsFor, budgetFor, withDeadline } = require("./providers");
+const { geminiFor, elevenLabsFor, budgetFor, withDeadline } = require("./providers");
+const { probeLlm } = require("./llm");
 const { probeTts, resolveProvider: resolveTtsProvider } = require("./tts");
 
 const READY_CACHE_MS = 30_000;
 let cached = null; // { at, result }
 let inflight = null; // Promise while a probe round is running
 
-async function probeAnthropic() {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return { configured: false, ok: false, reason: "no key" };
-  const client = anthropicFor("probe", key);
-  await client.models.list({ limit: 1 });
-  return { configured: true, ok: true };
+/** The active teaching-brain provider (ollama | gemini | anthropic). */
+async function probeTeachingBrain() {
+  return probeLlm();
 }
 
 async function probeGemini() {
   const key = process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
-  if (!key) return { configured: false, ok: false, reason: "no key" };
+  if (!key) {
+    // No key means library-only images (docs/07 option 3). That is a valid
+    // fully-local configuration, not a failure — the worker serves vetted
+    // diagrams and reports a clean miss when it has none.
+    return { configured: true, ok: true, provider: "library", note: "no image key; serving vetted diagrams only" };
+  }
   const ai = geminiFor("probe", key);
   const { timeoutMs } = budgetFor("probe");
   await ai.models.list({ config: { pageSize: 1, abortSignal: AbortSignal.timeout(timeoutMs) } });
-  return { configured: true, ok: true };
+  return { configured: true, ok: true, provider: "gemini" };
 }
 
 async function probeElevenLabs() {
@@ -68,12 +71,14 @@ async function runProbe(name, fn) {
 
 async function runProbeRound() {
   const now = Date.now();
-  const [claude, gemini, elevenlabs] = await Promise.all([
-    runProbe("anthropic", probeAnthropic),
-    runProbe("gemini", probeGemini),
-    runProbe("elevenlabs", probeElevenLabs),
+  const [teachingBrain, images, speech] = await Promise.all([
+    runProbe("teaching-brain", probeTeachingBrain),
+    runProbe("images", probeGemini),
+    runProbe("speech", probeElevenLabs),
   ]);
-  const providers = { claude, gemini, elevenlabs };
+  // Named by capability, not vendor: which vendor serves each is a flag now
+  // (LLM_PROVIDER, TTS_PROVIDER), and each entry reports its own provider.
+  const providers = { teachingBrain, images, speech };
   const configured = Object.values(providers).filter((p) => p.configured);
   const ready = configured.length > 0 && configured.every((p) => p.ok);
   const result = { ready, providers, checked_at: new Date(now).toISOString() };

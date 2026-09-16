@@ -66,15 +66,25 @@ describe("health endpoints", () => {
     expect(typeof body.uptime_s).toBe("number");
   });
 
-  it("/readyz reports 503 with per-provider detail when no provider is configured", async () => {
-    // Tests run without .env.local keys; readiness must say so, not "ok".
+  it("/readyz reports per-capability detail, named by capability not vendor", async () => {
+    // Tests run with no keys and no local Ollama, so the teaching brain must
+    // report unreachable rather than the endpoint claiming everything is fine.
     const res = await fetch(`${base}/readyz`);
-    expect(res.status).toBe(503);
+    expect([200, 503]).toContain(res.status);
     const body = await res.json();
+    for (const cap of ["teachingBrain", "images", "speech"]) {
+      expect(body.providers).toHaveProperty(cap);
+      expect(body.providers[cap]).toHaveProperty("ok");
+    }
+    // Images with no key is library-only, which is a valid local setup.
+    expect(body.providers.images).toMatchObject({
+      ok: true,
+      provider: "library",
+    });
+    // No Ollama running in tests -> teaching brain is not ready -> 503.
+    expect(body.providers.teachingBrain.ok).toBe(false);
     expect(body.ready).toBe(false);
-    expect(body.providers).toHaveProperty("claude");
-    expect(body.providers).toHaveProperty("gemini");
-    expect(body.providers).toHaveProperty("elevenlabs");
+    expect(res.status).toBe(503);
   });
 
   it("legacy /health stays cheap and 200, and carries the last readiness result", async () => {

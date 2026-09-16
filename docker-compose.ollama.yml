@@ -1,0 +1,40 @@
+# Fully local teaching brain (docs/07 "zero paid providers").
+#
+# Runs Ollama on CPU next to the app. No account, no key, no network egress
+# once the models are pulled.
+#
+#   docker compose -f docker-compose.ollama.yml up -d
+#   docker compose -f docker-compose.ollama.yml exec ollama ollama pull qwen2.5vl:3b
+#   docker compose -f docker-compose.ollama.yml exec ollama ollama pull qwen2.5:3b
+#
+# Then set LLM_PROVIDER=ollama in .env.local and restart the backend.
+#
+# Sizing note: this machine has no usable GPU (512 MB shared) and ~16 GB RAM,
+# so these are deliberately small 3B models. Expect seconds to a minute per
+# turn. docs/07 explains why anything larger is not viable here.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: amatic-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      # Models live on D: with the project, not on the C: system drive.
+      - ollama-models:/root/.ollama
+    environment:
+      # Keep one model resident so the next turn does not pay reload cost,
+      # and cap parallelism — CPU inference does not benefit from more.
+      - OLLAMA_KEEP_ALIVE=30m
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_NUM_PARALLEL=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ollama-models:

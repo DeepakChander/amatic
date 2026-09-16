@@ -608,6 +608,12 @@ export function useCanvasJarvis(
               }),
               signal: abort.signal,
             });
+            // 204 = library-only mode with no vetted diagram for this topic.
+            // Not a failure: the turn continues with voice and canvas labels,
+            // and counting it as one would trip the per-turn circuit breaker.
+            if (workerRes.status === 204) {
+              return;
+            }
             if (!workerRes.ok) {
               throw new Error(`worker HTTP ${workerRes.status}`);
             }

@@ -8,10 +8,47 @@
  * background so visuals appear on canvas instantly when the student finishes drawing.
  */
 
-const { TEACHING_MODEL } = require("./models");
-const { anthropicFor } = require("../lib/providers");
 const { recordLlmCall } = require("../lib/cost");
 const metrics = require("../lib/metrics");
+const llm = require("../lib/llm");
+
+/**
+ * The brief shape, as a JSON schema. Handed to the provider as a structured-
+ * output constraint so the model cannot return prose instead — the single
+ * biggest reliability win when running a small local model (docs/07).
+ */
+const BRIEF_SCHEMA = {
+  type: "object",
+  properties: {
+    topic: { type: "string" },
+    confidence: { type: "string", enum: ["high", "medium", "low"] },
+    visualBriefs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          style: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["prompt", "title"],
+      },
+    },
+    canvasLabels: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          content: { type: "string" },
+          fontSize: { type: "integer" },
+        },
+        required: ["content"],
+      },
+    },
+    voiceIntro: { type: "string" },
+  },
+  required: ["topic", "confidence", "visualBriefs", "canvasLabels", "voiceIntro"],
+};
 
 const SYSTEM_PROMPT = `You are an expert educational AI with deep knowledge across all subjects.
 You are given a small thumbnail of a student's hand-drawn canvas.
@@ -62,9 +99,11 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: "canvasImage (base64) is required" });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const provider = llm.resolveLlmProvider();
+  const model = llm.modelFor("recognize", provider);
+  const { key: apiKey, name: keyName } = llm.apiKeyFor(provider);
   if (!apiKey) {
-    return res.status(500).json({ error: "Anthropic API key not configured" });
+    return res.status(500).json({ error: `${keyName} not configured` });
   }
 
   // Recognition is a background operation: on any failure the client gets an
@@ -93,61 +132,44 @@ module.exports = async (req, res) => {
   const result = await (async () => {
     let response = null;
     try {
-      const client = anthropicFor("recognize", apiKey);
-
-      response = await client.messages.create({
-        model: TEACHING_MODEL,
-        // Raised from 2000: on Sonnet 5 thinking shares the max_tokens budget,
-        // and a tight cap risks spending it on thinking and truncating the JSON
-        // brief — which this endpoint's caller swallows silently.
-        max_tokens: 8000,
-        // temperature: 0.3 removed — Sonnet 5 400s on non-default sampling.
-        // Determinism is steered by SYSTEM_PROMPT; note temperature never
-        // guaranteed identical output anyway.
-        thinking: { type: "adaptive" },
-        // Fast background classification on the drawing hot path — low effort
-        // keeps latency near the old thinking-off behaviour.
-        output_config: { effort: "low" },
-        // Phase 3.1 — cache the static prompt. NOTE: this prompt is well under
-        // the model's 1024-token minimum cacheable prefix, so today it silently
-        // does not cache (cache_creation_input_tokens stays 0 on the llm_call
-        // event). The marker is here so it takes effect the moment the prompt
-        // grows past the threshold; the image after it is volatile anyway.
-        system: [
-          { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
-        ],
-        messages: [
+      response = await llm.generate({
+        provider,
+        route: "recognize",
+        apiKey,
+        system: SYSTEM_PROMPT,
+        userContent: [
           {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/jpeg",
-                  data: canvasImage,
-                },
-              },
-              {
-                type: "text",
-                text: "Analyze this student's hand-drawn canvas and return the teaching brief JSON.",
-              },
-            ],
+            type: "image",
+            source: { type: "base64", media_type: "image/jpeg", data: canvasImage },
+          },
+          {
+            type: "text",
+            text: "Analyze this student's hand-drawn canvas and return the teaching brief JSON.",
           },
         ],
-      }, { signal: deadline.signal });
+        // Room for thinking plus the brief. A tight cap risks spending the
+        // budget on thinking and truncating the JSON, which this endpoint's
+        // caller swallows silently.
+        maxTokens: provider === "anthropic" ? 8000 : 2048,
+        // Fast background classification on the drawing hot path.
+        effort: "low",
+        // A schema, not just "return JSON" in the prompt. Small local models
+        // are markedly more reliable with one, and it costs the hosted
+        // providers nothing.
+        json: BRIEF_SCHEMA,
+        signal: deadline.signal,
+      });
 
       recordLlmCall(log, {
         route: "recognize",
-        model: TEACHING_MODEL,
+        provider,
+        model,
         usage: response.usage,
         latencyMs: Date.now() - started,
         ok: true,
       });
 
-      const rawText = response.content
-        ?.find((b) => b.type === "text")
-        ?.text?.trim() ?? "";
+      const rawText = (response.text || "").trim();
 
       // Strip markdown code fences if Claude wrapped it anyway
       const jsonText = rawText

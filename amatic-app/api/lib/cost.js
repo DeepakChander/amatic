@@ -56,8 +56,7 @@ function estimateCost(model, usage) {
  * @param {Error} [p.error]
  * @returns {number|null} estimated cost in USD
  */
-function recordLlmCall(log, { route, model, usage, latencyMs, ok, outcome, error }) {
-  const provider = "anthropic";
+function recordLlmCall(log, { route, model, usage, latencyMs, ok, outcome, error, provider = "anthropic" }) {
   const finalOutcome = outcome ?? (ok ? "ok" : "error");
   // Tokens are billed whether or not the turn finished cleanly, so price
   // every usage block we have — otherwise interrupted turns under-report.
